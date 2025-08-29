@@ -16,7 +16,7 @@ def home():
     return jsonify({
         'message': 'Hello World from Material Recognition Service!',
         'timestamp': datetime.datetime.now().isoformat(),
-        'version': '1.0.0',
+        'version': '1.0.1',
         'environment': 'production',
         'instance_id': os.environ.get('INSTANCE_ID', 'unknown')
     })
