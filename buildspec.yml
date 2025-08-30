@@ -16,10 +16,12 @@ phases:
         PROD_INSTANCE_ID="i-0e0905a4ac58e5995"
         SERVICE_NAME="matsight-backend"
         PORT="8000"
+        ARTIFACT_BUCKET="matsight-artifacts-043309364810-us-east-1"
         
         echo "Target instance: $PROD_INSTANCE_ID"
         echo "Service name: $SERVICE_NAME"
         echo "Port: $PORT"
+        echo "Artifact bucket: $ARTIFACT_BUCKET"
         
         # Check if instance is running
         INSTANCE_STATUS=$(aws ec2 describe-instances \
@@ -34,137 +36,124 @@ phases:
         echo "Instance is running"
         
         # Create deployment script
-        cat > /tmp/deploy.sh << 'DEPLOY_EOF'
-        #!/bin/bash
-        set -e
+        cat > /tmp/deploy.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "Starting deployment..."
+
+# Configuration
+SERVICE_NAME="matsight-backend"
+PORT="8000"
+
+echo "Config: SERVICE_NAME=$SERVICE_NAME, PORT=$PORT"
+
+# Install system packages
+echo "Installing system packages..."
+sudo yum update -y
+sudo yum install -y git python3 python3-pip python3-devel gcc make rsync curl
+
+# Prepare directories
+sudo mkdir -p /opt/matsight
+sudo chown ec2-user:ec2-user /opt/matsight
+sudo mkdir -p /opt/matsight/current
+sudo chown ec2-user:ec2-user /opt/matsight/current
+
+# Stop existing service
+sudo systemctl stop $SERVICE_NAME || true
+
+# Backup existing deployment
+if [ -d "/opt/matsight/current" ] && [ "$(ls -A /opt/matsight/current 2>/dev/null)" ]; then
+  sudo mkdir -p /opt/matsight/backup
+  sudo mv /opt/matsight/current /opt/matsight/backup/$(date +%Y%m%d-%H%M%S)
+  sudo mkdir -p /opt/matsight/current
+  sudo chown ec2-user:ec2-user /opt/matsight/current
+fi
+
+# Copy source code from CodeBuild
+echo "Copying source code..."
+sudo rsync -a --delete /tmp/source/ /opt/matsight/current/
+sudo chown -R ec2-user:ec2-user /opt/matsight/current
+
+# Setup Python environment
+cd /opt/matsight/current
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+if [ -f "requirements.txt" ]; then
+  echo "Installing Python dependencies..."
+  pip install -r requirements.txt
+fi
+
+# Create a simple Flask app if none exists
+if [ ! -f "app.py" ]; then
+  echo "Creating minimal Flask app..."
+  cat > app.py << 'FLASK_EOF'
+from flask import Flask, jsonify
+import datetime
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return jsonify({'message': 'Matsight Backend OK', 'timestamp': datetime.datetime.now().isoformat()})
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy', 'timestamp': datetime.datetime.now().isoformat()})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000, debug=False)
+FLASK_EOF
+  pip install Flask==2.3.3 Werkzeug==2.3.7
+fi
+
+# Create systemd service
+sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
+[Unit]
+Description=$SERVICE_NAME
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/opt/matsight/current
+Environment=PATH=/opt/matsight/current/venv/bin
+ExecStart=/opt/matsight/current/venv/bin/python app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Start service
+sudo systemctl daemon-reload
+sudo systemctl enable $SERVICE_NAME
+sudo systemctl start $SERVICE_NAME
+
+# Check service status
+sudo systemctl status $SERVICE_NAME --no-pager || true
+
+# Health check
+echo "Performing health check..."
+sleep 5
+curl -fsS http://127.0.0.1:$PORT/health || curl -fsS http://127.0.0.1:$PORT/ || true
+
+echo "Deployment completed successfully"
+EOF
         
-        echo "Starting deployment..."
+        # Upload deployment script to S3
+        echo "Uploading deployment script to S3..."
+        aws s3 cp /tmp/deploy.sh s3://$ARTIFACT_BUCKET/deploy.sh
         
-        # Configuration
-        SERVICE_NAME="matsight-backend"
-        PORT="8000"
-        
-        echo "Config: SERVICE_NAME=$SERVICE_NAME, PORT=$PORT"
-        
-        # Install system packages
-        echo "Installing system packages..."
-        sudo yum update -y
-        sudo yum install -y git python3 python3-pip python3-devel gcc make rsync curl
-        
-        # Prepare directories
-        sudo mkdir -p /opt/matsight
-        sudo chown ec2-user:ec2-user /opt/matsight
-        sudo mkdir -p /opt/matsight/current
-        sudo chown ec2-user:ec2-user /opt/matsight/current
-        
-        # Stop existing service
-        sudo systemctl stop $SERVICE_NAME || true
-        
-        # Backup existing deployment
-        if [ -d "/opt/matsight/current" ] && [ "$(ls -A /opt/matsight/current 2>/dev/null)" ]; then
-          sudo mkdir -p /opt/matsight/backup
-          sudo mv /opt/matsight/current /opt/matsight/backup/$(date +%Y%m%d-%H%M%S)
-          sudo mkdir -p /opt/matsight/current
-          sudo chown ec2-user:ec2-user /opt/matsight/current
-        fi
-        
-        # Copy source code from CodeBuild
-        echo "Copying source code..."
-        sudo rsync -a --delete /tmp/source/ /opt/matsight/current/
-        sudo chown -R ec2-user:ec2-user /opt/matsight/current
-        
-        # Setup Python environment
-        cd /opt/matsight/current
-        python3 -m venv venv
-        source venv/bin/activate
-        
-        # Install dependencies
-        if [ -f "requirements.txt" ]; then
-          echo "Installing Python dependencies..."
-          pip install -r requirements.txt
-        fi
-        
-        # Auto-detect start command
-        START_CMD=""
-        echo "Auto-detecting start command..."
-        if [ -f requirements.txt ] && grep -qiE "^gunicorn(==|\s|$)" requirements.txt; then
-          START_CMD="gunicorn -b 0.0.0.0:$PORT app:app"
-          echo "Detected gunicorn"
-        elif [ -f requirements.txt ] && grep -qiE "^uvicorn(==|\s|$)" requirements.txt; then
-          START_CMD="uvicorn app:app --host 0.0.0.0 --port $PORT"
-          echo "Detected uvicorn"
-        elif [ -f app.py ]; then
-          START_CMD="/opt/matsight/current/venv/bin/python app.py"
-          echo "Detected app.py"
-        elif [ -f main.py ]; then
-          START_CMD="/opt/matsight/current/venv/bin/python main.py"
-          echo "Detected main.py"
-        else
-          echo "No recognizable entry point found. Creating minimal Flask app..."
-          cat > app.py << 'FLASK_EOF'
-        from flask import Flask, jsonify
-        import datetime
-        
-        app = Flask(__name__)
-        
-        @app.route('/')
-        def home():
-            return jsonify({'message': 'Matsight Backend OK', 'timestamp': datetime.datetime.now().isoformat()})
-        
-        @app.route('/health')
-        def health():
-            return jsonify({'status': 'healthy', 'timestamp': datetime.datetime.now().isoformat()})
-        
-        if __name__ == '__main__':
-            app.run(host='0.0.0.0', port=8000, debug=False)
-        FLASK_EOF
-          pip install Flask==2.3.3 Werkzeug==2.3.7
-          START_CMD="/opt/matsight/current/venv/bin/python app.py"
-        fi
-        
-        echo "Using start command: $START_CMD"
-        
-        # Create systemd service
-        sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
-        [Unit]
-        Description=$SERVICE_NAME
-        After=network.target
-        
-        [Service]
-        Type=simple
-        User=ec2-user
-        WorkingDirectory=/opt/matsight/current
-        Environment=PATH=/opt/matsight/current/venv/bin
-        ExecStart=/bin/bash -lc "$START_CMD"
-        Restart=always
-        RestartSec=10
-        
-        [Install]
-        WantedBy=multi-user.target
-        EOF
-        
-        # Start service
-        sudo systemctl daemon-reload
-        sudo systemctl enable $SERVICE_NAME
-        sudo systemctl start $SERVICE_NAME
-        
-        # Check service status
-        sudo systemctl status $SERVICE_NAME --no-pager || true
-        
-        # Health check
-        echo "Performing health check..."
-        sleep 5
-        curl -fsS http://127.0.0.1:$PORT/health || curl -fsS http://127.0.0.1:$PORT/ || true
-        
-        echo "Deployment completed successfully"
-        DEPLOY_EOF
-        
-        # Send deployment script to production instance
-        echo "Sending deployment script to production instance..."
+        # Send deployment commands to production instance
+        echo "Sending deployment commands to production instance..."
         COMMAND_ID=$(aws ssm send-command \
           --instance-ids $PROD_INSTANCE_ID \
           --document-name "AWS-RunShellScript" \
-          --parameters "commands=[\"cat > /tmp/deploy.sh << 'DEPLOY_EOF'\", \"$(cat /tmp/deploy.sh)\", \"DEPLOY_EOF\", \"chmod +x /tmp/deploy.sh\", \"/tmp/deploy.sh\"]" \
+          --parameters '{"commands":["aws s3 cp s3://'"$ARTIFACT_BUCKET"'/deploy.sh /tmp/deploy.sh", "chmod +x /tmp/deploy.sh", "/tmp/deploy.sh"]}' \
           --query 'Command.CommandId' --output text)
         
         echo "Deployment command sent: $COMMAND_ID"
@@ -174,8 +163,8 @@ phases:
         while true; do
           sleep 10
           STATUS=$(aws ssm get-command-invocation \
-            --command-id $COMMAND_ID \
-            --instance-id $PROD_INSTANCE_ID \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$PROD_INSTANCE_ID" \
             --query 'Status' --output text)
           
           echo "Current status: $STATUS"
@@ -185,7 +174,7 @@ phases:
             break
           elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
             echo "Deployment failed with status: $STATUS"
-            aws ssm get-command-invocation --command-id $COMMAND_ID --instance-id $PROD_INSTANCE_ID --query 'StandardErrorContent' --output text
+            aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$PROD_INSTANCE_ID" --query 'StandardErrorContent' --output text
             exit 1
           fi
         done
