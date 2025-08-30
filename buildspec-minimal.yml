@@ -1,0 +1,85 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Starting minimal deployment to production EC2..."
+      - aws --version
+      - python3 --version
+      - echo "Build environment ready"
+  
+  build:
+    commands:
+      - echo "Deploying to production instance..."
+      - |
+        # Configuration from CDK environment variables
+        PROD_INSTANCE_ID="$PROD_INSTANCE_ID"
+        SERVICE_NAME="matsight-backend"
+        PORT="8000"
+        ARTIFACT_BUCKET="$ARTIFACT_BUCKET"
+        
+        echo "Target instance: $PROD_INSTANCE_ID"
+        echo "Service name: $SERVICE_NAME"
+        echo "Port: $PORT"
+        echo "Artifact bucket: $ARTIFACT_BUCKET"
+        
+        # Check if instance is running
+        INSTANCE_STATUS=$(aws ec2 describe-instances \
+          --instance-ids $PROD_INSTANCE_ID \
+          --query 'Reservations[0].Instances[0].State.Name' --output text)
+        
+        if [ "$INSTANCE_STATUS" != "running" ]; then
+          echo "Instance $PROD_INSTANCE_ID is not running (status: $INSTANCE_STATUS)"
+          exit 1
+        fi
+        
+        echo "Instance is running"
+        
+        # Create deployment commands
+        echo "Creating deployment commands..."
+        
+        # Upload source code to S3
+        echo "Uploading source code to S3..."
+        aws s3 cp /tmp/source/ s3://$ARTIFACT_BUCKET/source/ --recursive
+        
+        # Execute deployment via SSM
+        echo "Executing deployment via SSM..."
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids $PROD_INSTANCE_ID \
+          --document-name "AWS-RunShellScript" \
+          --parameters '{"commands":["aws s3 cp s3://'"$ARTIFACT_BUCKET"'/source/ /opt/matsight/ --recursive", "chown -R ec2-user:ec2-user /opt/matsight", "cd /opt/matsight", "python3 -m venv venv", "source venv/bin/activate", "pip install Flask==2.3.3 Werkzeug==2.3.7", "sudo systemctl stop matsight-backend || true", "sudo systemctl disable matsight-backend || true", "sudo tee /etc/systemd/system/matsight-backend.service > /dev/null << EOF", "[Unit]", "Description=matsight-backend", "After=network.target", "", "[Service]", "Type=simple", "User=ec2-user", "WorkingDirectory=/opt/matsight", "Environment=PATH=/opt/matsight/venv/bin", "ExecStart=/opt/matsight/venv/bin/python app.py", "Restart=always", "RestartSec=10", "", "[Install]", "WantedBy=multi-user.target", "EOF", "sudo systemctl daemon-reload", "sudo systemctl enable matsight-backend", "sudo systemctl start matsight-backend", "sleep 5", "curl -fsS http://127.0.0.1:8000/health || curl -fsS http://127.0.0.1:8000/ || echo Health check failed"]}' \
+          --timeout-seconds 600 \
+          --query 'Command.CommandId' --output text)
+        
+        echo "Deployment command sent: $COMMAND_ID"
+        
+        # Wait for deployment to complete
+        echo "Waiting for deployment to complete..."
+        while true; do
+          sleep 10
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$PROD_INSTANCE_ID" \
+            --query 'Status' --output text)
+          
+          echo "Deployment status: $STATUS"
+          
+          if [ "$STATUS" = "Success" ]; then
+            echo "Deployment successful!"
+            break
+          elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+            echo "Deployment failed with status: $STATUS"
+            echo "Error output:"
+            aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$PROD_INSTANCE_ID" --query 'StandardErrorContent' --output text
+            exit 1
+          fi
+        done
+
+  post_build:
+    commands:
+      - echo "Minimal deployment completed successfully!"
+
+artifacts:
+  files:
+    - deploy-output.json
+  discard-paths: no
