@@ -10,13 +10,13 @@ phases:
   
   build:
     commands:
-      - echo "Deploying to production instance i-0e0905a4ac58e5995..."
+      - echo "Deploying to production instance..."
       - |
-        # Configuration
-        PROD_INSTANCE_ID="i-0e0905a4ac58e5995"
+        # Configuration from CDK environment variables
+        PROD_INSTANCE_ID="$PROD_INSTANCE_ID"
         SERVICE_NAME="matsight-backend"
         PORT="8000"
-        ARTIFACT_BUCKET="matsight-artifacts-043309364810-us-east-1"
+        ARTIFACT_BUCKET="$ARTIFACT_BUCKET"
         
         echo "Target instance: $PROD_INSTANCE_ID"
         echo "Service name: $SERVICE_NAME"
@@ -60,10 +60,13 @@ sudo mkdir -p /opt/matsight/current
 sudo chown ec2-user:ec2-user /opt/matsight/current
 
 # Stop existing service
+echo "Stopping existing service..."
 sudo systemctl stop $SERVICE_NAME || true
+sudo systemctl disable $SERVICE_NAME || true
 
 # Backup existing deployment
 if [ -d "/opt/matsight/current" ] && [ "$(ls -A /opt/matsight/current 2>/dev/null)" ]; then
+  echo "Backing up existing deployment..."
   sudo mkdir -p /opt/matsight/backup
   sudo mv /opt/matsight/current /opt/matsight/backup/$(date +%Y%m%d-%H%M%S)
   sudo mkdir -p /opt/matsight/current
@@ -77,13 +80,18 @@ sudo chown -R ec2-user:ec2-user /opt/matsight/current
 
 # Setup Python environment
 cd /opt/matsight/current
+echo "Setting up Python virtual environment..."
 python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
 if [ -f "requirements.txt" ]; then
   echo "Installing Python dependencies..."
+  pip install --upgrade pip
   pip install -r requirements.txt
+else
+  echo "No requirements.txt found, installing basic Flask..."
+  pip install Flask==2.3.3 Werkzeug==2.3.7
 fi
 
 # Create a simple Flask app if none exists
@@ -106,11 +114,11 @@ def health():
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000, debug=False)
 FLASK_EOF
-  pip install Flask==2.3.3 Werkzeug==2.3.7
 fi
 
 # Create systemd service
-sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
+echo "Creating systemd service..."
+sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << SERVICE_EOF
 [Unit]
 Description=$SERVICE_NAME
 After=network.target
@@ -123,23 +131,38 @@ Environment=PATH=/opt/matsight/current/venv/bin
 ExecStart=/opt/matsight/current/venv/bin/python app.py
 Restart=always
 RestartSec=10
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SERVICE_EOF
 
 # Start service
+echo "Starting service..."
 sudo systemctl daemon-reload
 sudo systemctl enable $SERVICE_NAME
 sudo systemctl start $SERVICE_NAME
 
 # Check service status
+echo "Checking service status..."
 sudo systemctl status $SERVICE_NAME --no-pager || true
 
-# Health check
+# Health check with retries
 echo "Performing health check..."
-sleep 5
-curl -fsS http://127.0.0.1:$PORT/health || curl -fsS http://127.0.0.1:$PORT/ || true
+for i in {1..10}; do
+  echo "Health check attempt $i/10..."
+  if curl -fsS http://127.0.0.1:$PORT/health > /dev/null 2>&1 || curl -fsS http://127.0.0.1:$PORT/ > /dev/null 2>&1; then
+    echo "Health check passed!"
+    break
+  fi
+  if [ $i -eq 10 ]; then
+    echo "Health check failed after 10 attempts"
+    sudo systemctl status $SERVICE_NAME --no-pager
+    exit 1
+  fi
+  sleep 3
+done
 
 echo "Deployment completed successfully"
 EOF
@@ -150,31 +173,69 @@ EOF
         
         # Send deployment commands to production instance
         echo "Sending deployment commands to production instance..."
-        COMMAND_ID=$(aws ssm send-command \
+        
+        # First, copy the deployment script to the instance
+        echo "Copying deployment script to instance..."
+        COMMAND_ID_1=$(aws ssm send-command \
           --instance-ids $PROD_INSTANCE_ID \
           --document-name "AWS-RunShellScript" \
-          --parameters '{"commands":["aws s3 cp s3://'"$ARTIFACT_BUCKET"'/deploy.sh /tmp/deploy.sh", "chmod +x /tmp/deploy.sh", "/tmp/deploy.sh"]}' \
+          --parameters '{"commands":["aws s3 cp s3://'"$ARTIFACT_BUCKET"'/deploy.sh /tmp/deploy.sh", "chmod +x /tmp/deploy.sh"]}' \
           --query 'Command.CommandId' --output text)
         
-        echo "Deployment command sent: $COMMAND_ID"
+        echo "Copy command sent: $COMMAND_ID_1"
+        
+        # Wait for copy to complete
+        echo "Waiting for script copy to complete..."
+        while true; do
+          sleep 5
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID_1" \
+            --instance-id "$PROD_INSTANCE_ID" \
+            --query 'Status' --output text)
+          
+          echo "Copy status: $STATUS"
+          
+          if [ "$STATUS" = "Success" ]; then
+            echo "Script copy successful!"
+            break
+          elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+            echo "Script copy failed with status: $STATUS"
+            aws ssm get-command-invocation --command-id "$COMMAND_ID_1" --instance-id "$PROD_INSTANCE_ID" --query 'StandardErrorContent' --output text
+            exit 1
+          fi
+        done
+        
+        # Then execute the deployment script
+        echo "Executing deployment script..."
+        COMMAND_ID_2=$(aws ssm send-command \
+          --instance-ids $PROD_INSTANCE_ID \
+          --document-name "AWS-RunShellScript" \
+          --parameters '{"commands":["/tmp/deploy.sh"]}' \
+          --timeout-seconds 900 \
+          --query 'Command.CommandId' --output text)
+        
+        echo "Deployment command sent: $COMMAND_ID_2"
         
         # Wait for deployment to complete
         echo "Waiting for deployment to complete..."
         while true; do
-          sleep 10
+          sleep 15
           STATUS=$(aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
+            --command-id "$COMMAND_ID_2" \
             --instance-id "$PROD_INSTANCE_ID" \
             --query 'Status' --output text)
           
-          echo "Current status: $STATUS"
+          echo "Deployment status: $STATUS"
           
           if [ "$STATUS" = "Success" ]; then
             echo "Deployment successful!"
             break
           elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
             echo "Deployment failed with status: $STATUS"
-            aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$PROD_INSTANCE_ID" --query 'StandardErrorContent' --output text
+            echo "Error output:"
+            aws ssm get-command-invocation --command-id "$COMMAND_ID_2" --instance-id "$PROD_INSTANCE_ID" --query 'StandardErrorContent' --output text
+            echo "Standard output:"
+            aws ssm get-command-invocation --command-id "$COMMAND_ID_2" --instance-id "$PROD_INSTANCE_ID" --query 'StandardOutputContent' --output text
             exit 1
           fi
         done
