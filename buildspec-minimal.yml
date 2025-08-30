@@ -81,5 +81,5 @@ phases:
 
 artifacts:
   files:
-    - deploy-output.json
+    - '**/*'
   discard-paths: no
