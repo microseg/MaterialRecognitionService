@@ -1,6 +1,6 @@
 FROM public.ecr.aws/docker/library/python:3.11-slim
 
-# Install system dependencies including git, wget, unzip, and OpenCV dependencies
+# Install system dependencies including git, wget, unzip, and minimal OpenCV dependencies
 RUN apt-get update && apt-get install -y \
     git \
     gcc \
@@ -16,12 +16,6 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     libgthread-2.0-0 \
     libgtk-3-0 \
-    libavcodec-dev \
-    libavformat-dev \
-    libswscale-dev \
-    libv4l-dev \
-    libxvidcore-dev \
-    libx264-dev \
     libjpeg-dev \
     libpng-dev \
     libtiff-dev \
