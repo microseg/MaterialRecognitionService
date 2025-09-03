@@ -39,9 +39,21 @@ table = dynamodb.Table(DYNAMODB_TABLE_NAME)
 
 # MaskTerial model imports (these will be available after installation)
 try:
-    from maskterial import MaskTerialDetector
-    MASKTERIAL_AVAILABLE = True
-    logger.info("MaskTerial model imported successfully")
+    import maskterial
+    # Try to find the correct detector class
+    detector_class = None
+    for item in dir(maskterial):
+        if 'detector' in item.lower() or 'detect' in item.lower():
+            detector_class = getattr(maskterial, item)
+            break
+    
+    if detector_class:
+        MaskTerialDetector = detector_class
+        MASKTERIAL_AVAILABLE = True
+        logger.info(f"MaskTerial model imported successfully with class: {detector_class.__name__}")
+    else:
+        MASKTERIAL_AVAILABLE = False
+        logger.warning("No detector class found in maskterial module - using mock detection")
 except ImportError:
     MASKTERIAL_AVAILABLE = False
     logger.warning("MaskTerial model not available - using mock detection")

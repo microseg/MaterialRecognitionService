@@ -34,27 +34,62 @@ def check_model_directory():
     return True
 
 def check_maskterial_import():
-    """Check if MaskTerial can be imported"""
+    """Check if MaskTerial can be imported and find the correct class"""
     try:
-        from maskterial import MaskTerialDetector
-        print("✅ MaskTerial imported successfully")
-        return True
+        import maskterial
+        print("✅ MaskTerial module imported successfully")
+        
+        # Check what's available in the module
+        print(f"📋 Available in maskterial module: {dir(maskterial)}")
+        
+        # Try to find the detector class
+        detector_class = None
+        for item in dir(maskterial):
+            if 'detector' in item.lower() or 'detect' in item.lower():
+                detector_class = item
+                break
+        
+        if detector_class:
+            print(f"✅ Found detector class: {detector_class}")
+            return True, detector_class
+        else:
+            print("⚠️  No detector class found in maskterial module")
+            return False, None
+            
     except ImportError as e:
         print(f"❌ Failed to import MaskTerial: {e}")
-        return False
+        return False, None
 
 def check_detector_initialization():
     """Check if detector can be initialized"""
     try:
-        from maskterial import MaskTerialDetector
+        import maskterial
         model_path = os.environ.get('MODEL_PATH', '/opt/maskterial/models')
         
-        print(f"🔧 Initializing MaskTerial detector with model path: {model_path}")
-        detector = MaskTerialDetector(model_path=model_path)
-        print("✅ MaskTerial detector initialized successfully")
-        return True
+        # Try different possible class names
+        possible_classes = ['MaskTerialDetector', 'Detector', 'MaskTerial', 'MaterialDetector']
+        
+        detector = None
+        for class_name in possible_classes:
+            if hasattr(maskterial, class_name):
+                print(f"🔧 Found class: {class_name}")
+                detector_class = getattr(maskterial, class_name)
+                try:
+                    detector = detector_class(model_path=model_path)
+                    print(f"✅ Successfully initialized {class_name}")
+                    break
+                except Exception as e:
+                    print(f"⚠️  Failed to initialize {class_name}: {e}")
+                    continue
+        
+        if detector:
+            return True
+        else:
+            print("❌ Could not initialize any detector class")
+            return False
+            
     except Exception as e:
-        print(f"❌ Failed to initialize MaskTerial detector: {e}")
+        print(f"❌ Failed to initialize detector: {e}")
         return False
 
 def main():
@@ -65,7 +100,7 @@ def main():
     dir_ok = check_model_directory()
     
     # Check import
-    import_ok = check_maskterial_import()
+    import_ok, detector_class = check_maskterial_import()
     
     # Check initialization
     init_ok = False
