@@ -40,12 +40,16 @@ table = dynamodb.Table(DYNAMODB_TABLE_NAME)
 # MaskTerial model imports (these will be available after installation)
 try:
     import maskterial
-    # Try to find the correct detector class
+    # Try to find the correct detector class - MaskTerial should be the main one
     detector_class = None
-    for item in dir(maskterial):
-        if 'detector' in item.lower() or 'detect' in item.lower():
-            detector_class = getattr(maskterial, item)
-            break
+    if hasattr(maskterial, 'MaskTerial'):
+        detector_class = getattr(maskterial, 'MaskTerial')
+    else:
+        # Fallback: look for classes with 'detector' or 'detect' in the name
+        for item in dir(maskterial):
+            if 'detector' in item.lower() or 'detect' in item.lower():
+                detector_class = getattr(maskterial, item)
+                break
     
     if detector_class:
         MaskTerialDetector = detector_class

@@ -42,12 +42,16 @@ def check_maskterial_import():
         # Check what's available in the module
         print(f"📋 Available in maskterial module: {dir(maskterial)}")
         
-        # Try to find the detector class
+        # Try to find the detector class - look for MaskTerial specifically
         detector_class = None
-        for item in dir(maskterial):
-            if 'detector' in item.lower() or 'detect' in item.lower():
-                detector_class = item
-                break
+        if hasattr(maskterial, 'MaskTerial'):
+            detector_class = 'MaskTerial'
+        else:
+            # Fallback: look for classes with 'detector' or 'detect' in the name
+            for item in dir(maskterial):
+                if 'detector' in item.lower() or 'detect' in item.lower():
+                    detector_class = item
+                    break
         
         if detector_class:
             print(f"✅ Found detector class: {detector_class}")
@@ -66,8 +70,8 @@ def check_detector_initialization():
         import maskterial
         model_path = os.environ.get('MODEL_PATH', '/opt/maskterial/models')
         
-        # Try different possible class names
-        possible_classes = ['MaskTerialDetector', 'Detector', 'MaskTerial', 'MaterialDetector']
+        # Try different possible class names - MaskTerial should be the main one
+        possible_classes = ['MaskTerial', 'MaskTerialDetector', 'Detector', 'MaterialDetector']
         
         detector = None
         for class_name in possible_classes:
