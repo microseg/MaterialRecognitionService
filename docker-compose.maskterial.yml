@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  maskterial:
+    build:
+      context: .
+      dockerfile: Dockerfile.maskterial
+    ports:
+      - "5000:5000"
+    environment:
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-matsight-customer-images}
+      - DYNAMODB_TABLE_NAME=${DYNAMODB_TABLE_NAME:-CustomerImages}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - MODEL_PATH=/opt/maskterial/models
+      - ENABLE_GPU=${ENABLE_GPU:-false}
+    volumes:
+      - ./models:/opt/maskterial/models
+      - ./logs:/app/logs
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Optional: Add a simple frontend for testing
+  frontend:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html
+    depends_on:
+      - maskterial
+    restart: unless-stopped
+
+volumes:
+  models:
+  logs:

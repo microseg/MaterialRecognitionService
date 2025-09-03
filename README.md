@@ -1,204 +1,306 @@
-# Material Recognition Service
+# Material Recognition Service with MaskTerial
 
-**🚀 Production Ready - ECR Deployment**
+A comprehensive AWS-based service for 2D material flake detection using the MaskTerial deep learning model. This service provides a complete pipeline for processing microscopy images, detecting 2D materials, and storing results in AWS S3 and DynamoDB.
 
-A production-ready application with automated CI/CD deployment workflow using AWS ECR and EC2.
+## Features
 
-## Overview
-
-This service demonstrates a modern containerized deployment pipeline using:
-- **Backend**: Python Flask API with AWS S3/DynamoDB integration
-- **Containerization**: Docker with Python 3.11
-- **Infrastructure**: AWS CDK with EC2, ECR, CodePipeline, S3, DynamoDB
-- **Deployment**: Automated CI/CD via GitHub webhooks with ECR image deployment
-
-## Current Status
-
-- ✅ Infrastructure deployed with CDK
-- ✅ ECR repository configured
-- ✅ CI/CD pipeline configured (GitHub → CodeBuild → ECR → EC2)
-- ✅ Docker containerization
-- ✅ Automated deployment to EC2 via SSM
-- ✅ AWS storage integration (S3 + DynamoDB)
+- **MaskTerial Integration**: Uses the state-of-the-art MaskTerial model for 2D material detection
+- **AWS Integration**: Seamless integration with S3 for image storage and DynamoDB for metadata
+- **RESTful API**: Flask-based API with endpoints for image upload and S3-based processing
+- **Docker Support**: Containerized deployment with GPU support
+- **CI/CD Pipeline**: Automated deployment using AWS CDK
+- **Monitoring**: CloudWatch integration for logging and monitoring
+- **Scalable Architecture**: Designed for high availability and scalability
 
 ## Architecture
 
-### Deployment Flow
-1. **Source**: GitHub mainline branch triggers pipeline
-2. **Build**: AWS CodeBuild builds Docker image
-3. **Push**: Image pushed to AWS ECR repository
-4. **Deploy**: SSM commands deploy container to EC2 instance
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Client App    │    │   API Gateway   │    │   Load Balancer │
+│                 │───▶│                 │───▶│                 │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                                       │
+                                                       ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   S3 Bucket     │◀───│   DynamoDB      │◀───│  MaskTerial     │
+│   (Images)      │    │   (Metadata)    │    │  EC2 Instance   │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
 
-### Container Details
-- **Base Image**: Python 3.11 slim
-- **Web Server**: Gunicorn with 4 workers
-- **Port**: 5000
-- **Health Check**: `/health` endpoint
-
-## Local Development
+## Quick Start
 
 ### Prerequisites
-- Docker
-- Python 3.11
+
+- AWS Account with appropriate permissions
 - AWS CLI configured
+- Node.js (v16+)
+- Docker (for local testing)
+- Python 3.8+
 
-### Running Locally
-```bash
-# Build Docker image
-docker build -t material-recognition-service .
+### Local Development
 
-# Run container
-docker run -p 5000:5000 material-recognition-service
+1. **Clone the repository**:
+   ```bash
+   git clone <repository-url>
+   cd MaterialRecognitionService
+   ```
 
-# Test endpoints
-curl http://localhost:5000/health
-curl http://localhost:5000/add/5/3
-```
+2. **Set up environment variables**:
+   ```bash
+   export S3_BUCKET_NAME=your-s3-bucket-name
+   export DYNAMODB_TABLE_NAME=your-dynamodb-table-name
+   export AWS_DEFAULT_REGION=us-east-1
+   ```
 
-### Development without Docker
-```bash
-# Install dependencies
-pip install -r requirements.txt
+3. **Run with Docker Compose**:
+   ```bash
+   docker-compose -f docker-compose.maskterial.yml up --build
+   ```
 
-# Run application
-python app.py
+4. **Test the service**:
+   ```bash
+   python test_maskterial.py
+   ```
 
-# Test endpoints
-curl http://localhost:5000/health
-```
+### AWS Deployment
+
+1. **Deploy infrastructure**:
+   ```bash
+   cd MaterialRecognitionServiceCDK
+   npm install
+   cdk deploy
+   ```
+
+2. **Configure EC2 instance**:
+   ```bash
+   # Create SSH key pair
+   aws ec2 create-key-pair --key-name maskterial-key --query 'KeyMaterial' --output text > maskterial-key.pem
+   chmod 400 maskterial-key.pem
+   
+   # SSH into instance
+   ssh -i maskterial-key.pem ec2-user@<EC2_PUBLIC_IP>
+   ```
+
+3. **Verify deployment**:
+   ```bash
+   curl http://localhost:5000/health
+   ```
 
 ## API Endpoints
 
-### Core Endpoints
-```bash
-# Health check
-curl http://localhost:5000/health
-
-# Basic calculation
-curl http://localhost:5000/add/5/3
-
-# Root endpoint
-curl http://localhost:5000/
+### Health Check
+```http
+GET /health
 ```
 
-### Storage Endpoints
-```bash
-# Storage status
-curl http://localhost:5000/storage/test
-
-# S3 test
-curl http://localhost:5000/storage/s3/test
-
-# DynamoDB test
-curl http://localhost:5000/storage/dynamodb/test
-
-# Save test data
-curl http://localhost:5000/storage/save-test
-
-# Diagnostic information
-curl http://localhost:5000/diagnose
+### Service Information
+```http
+GET /info
 ```
 
-## Infrastructure
+### Detect from Uploaded Image
+```http
+POST /detect
+Content-Type: multipart/form-data
 
-### AWS Resources
-- **ECR Repository**: Stores Docker images
-- **EC2 Instance**: Runs the application container
-- **CodePipeline**: Orchestrates CI/CD workflow
-- **CodeBuild**: Builds and pushes Docker images
-- **S3 Bucket**: `matsight-customer-images-dev`
-- **DynamoDB Table**: `CustomerImages-Dev`
-
-### IAM Permissions
-- ECR push/pull permissions for CodeBuild
-- SSM command execution for EC2 deployment
-- S3 and DynamoDB access for application
-
-## Deployment
-
-### Manual Deployment
-```bash
-# Build and push to ECR
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
-docker build -t material-recognition-service .
-docker tag material-recognition-service:latest <ecr-repo-uri>:latest
-docker push <ecr-repo-uri>:latest
-
-# Deploy to EC2 (via SSM)
-aws ssm send-command --instance-ids <instance-id> --document-name "AWS-RunShellScript" --parameters '{"commands":["docker pull <ecr-repo-uri>:latest","docker stop material-recognition || true","docker rm material-recognition || true","docker run -d --name material-recognition -p 5000:5000 --restart always <ecr-repo-uri>:latest"]}'
+Parameters:
+- image: Image file
+- customer_id: Customer identifier (optional)
 ```
 
-### Automated Deployment
-The pipeline automatically:
-1. Monitors GitHub mainline branch
-2. Builds Docker image on code changes
-3. Pushes to ECR repository
-4. Deploys to EC2 instance via SSM
+### Detect from S3
+```http
+POST /detect_from_s3
+Content-Type: application/json
 
-## Monitoring
-
-### Container Status
-```bash
-# Check container status
-docker ps
-
-# View container logs
-docker logs material-recognition
-
-# Check application health
-curl http://localhost:5000/health
-```
-
-### System Status
-```bash
-# Check systemd service (if applicable)
-systemctl status material-recognition.service
-
-# View application logs
-journalctl -u material-recognition.service -f
-```
-
-## Troubleshooting
-
-### Common Issues
-1. **Container won't start**: Check Docker logs and port conflicts
-2. **ECR login failed**: Verify AWS credentials and region
-3. **SSM deployment failed**: Check instance permissions and connectivity
-4. **Application errors**: Check container logs and health endpoint
-
-### Debug Commands
-```bash
-# Check ECR repository
-aws ecr describe-repositories
-
-# List ECR images
-aws ecr list-images --repository-name material-recognition-service
-
-# Check SSM command status
-aws ssm get-command-invocation --command-id <command-id> --instance-id <instance-id>
+Body:
+{
+  "s3_key": "customer-123/uploaded/image.jpg",
+  "customer_id": "customer-123"
+}
 ```
 
 ## Configuration
 
 ### Environment Variables
-- `PORT`: Application port (default: 5000)
-- `AWS_DEFAULT_REGION`: AWS region for services
-- `AWS_ACCESS_KEY_ID`: AWS access key (if not using IAM roles)
-- `AWS_SECRET_ACCESS_KEY`: AWS secret key (if not using IAM roles)
 
-### Docker Configuration
-- **Memory**: 512MB minimum
-- **CPU**: 1 vCPU minimum
-- **Storage**: 10GB minimum
-- **Network**: Port 5000 exposed
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `S3_BUCKET_NAME` | S3 bucket for storing images | `matsight-customer-images` |
+| `DYNAMODB_TABLE_NAME` | DynamoDB table for metadata | `CustomerImages` |
+| `AWS_DEFAULT_REGION` | AWS region | `us-east-1` |
+| `MODEL_PATH` | Path to MaskTerial models | `/opt/maskterial/models` |
+| `ENABLE_GPU` | Enable GPU support | `false` |
+
+### S3 Bucket Structure
+
+```
+s3://matsight-customer-images/
+├── {customerID}/
+│   ├── uploaded/
+│   │   ├── {imageID}_original.jpg
+│   │   └── {imageID}_thumbnail.jpg
+│   └── saved-result/
+│       ├── {imageID}_result.jpg
+│       └── {imageID}_thumbnail.jpg
+```
+
+## MaskTerial Model
+
+This service integrates the [MaskTerial](https://github.com/Jaluus/MaskTerial) model, which is a foundation model for automated 2D material flake detection. The model provides:
+
+- **Robust Detection**: Less sensitive to camera noise and brightness differences
+- **Interpretable Results**: Uses well-understood features from literature
+- **Backwards Compatibility**: Can use previous GMM models if needed
+- **Open Source**: Fully open-source under MIT license
+- **Pretrained Weights**: Available for immediate use with minimal fine-tuning
+
+### Model Features
+
+- Detects multiple 2D materials (graphene, hBN, MoS2, WS2, etc.)
+- Provides confidence scores and bounding boxes
+- Handles low-contrast materials effectively
+- Requires minimal training data (5-10 images) for new materials
+
+## Development
+
+### Project Structure
+
+```
+MaterialRecognitionService/
+├── MaterialRecognitionService/
+│   ├── app.py                 # Original calculator service
+│   ├── maskterial_app.py      # MaskTerial API service
+│   ├── requirements.txt       # Python dependencies
+│   ├── Dockerfile.maskterial  # Docker configuration
+│   ├── test_maskterial.py     # Test script
+│   └── docker-compose.maskterial.yml
+├── MaterialRecognitionServiceCDK/
+│   ├── lib/
+│   │   ├── stack.ts           # Main CDK stack
+│   │   └── modules/
+│   │       ├── storage/       # S3 and DynamoDB modules
+│   │       └── maskterial-module.ts
+│   └── package.json
+└── docs/
+```
+
+### Adding New Features
+
+1. **New API Endpoints**: Add to `maskterial_app.py`
+2. **Infrastructure Changes**: Modify CDK modules in `lib/modules/`
+3. **Model Updates**: Update Dockerfile and requirements.txt
+4. **Testing**: Add tests to `test_maskterial.py`
+
+## Monitoring and Logging
+
+### CloudWatch Integration
+
+- Application logs: `/aws/ec2/maskterial/app`
+- Docker logs: `/aws/ec2/maskterial/docker`
+- Health checks: Every 30 seconds
+- Cron monitoring: Every 5 minutes
+
+### Health Checks
+
+```bash
+# Application health
+curl http://localhost:5000/health
+
+# Docker health
+docker ps
+docker logs <container_id>
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Model Loading Errors**:
+   - Check GPU drivers and CUDA installation
+   - Verify model files are in correct location
+   - Check MaskTerial installation
+
+2. **AWS Connectivity**:
+   - Verify IAM roles and policies
+   - Check security group configurations
+   - Ensure correct region settings
+
+3. **Performance Issues**:
+   - Monitor EC2 instance resources
+   - Check GPU utilization
+   - Review CloudWatch metrics
+
+### Debug Commands
+
+```bash
+# Check service status
+sudo systemctl status docker
+docker ps
+
+# View logs
+docker logs <container_id>
+tail -f /opt/maskterial/logs/app.log
+
+# Test AWS connectivity
+aws s3 ls s3://your-bucket-name
+aws dynamodb describe-table --table-name your-table-name
+```
 
 ## Security
 
-- **Container Security**: Non-root user, minimal base image
-- **Network Security**: VPC isolation, security groups
-- **IAM Security**: Least privilege principle
-- **Secrets Management**: AWS Secrets Manager for sensitive data
+### Best Practices
 
----
+1. **Network Security**:
+   - Use security groups to restrict access
+   - Enable SSL/TLS for API communication
+   - Consider VPC endpoints for AWS services
 
-*This application is production-ready and follows AWS best practices for containerized deployments.*
+2. **Data Security**:
+   - Enable S3 bucket encryption
+   - Use DynamoDB encryption at rest
+   - Implement proper IAM roles
+
+3. **Application Security**:
+   - Keep dependencies updated
+   - Validate all inputs
+   - Use secure image handling
+
+## Cost Optimization
+
+### Recommendations
+
+1. **EC2 Instances**:
+   - Use spot instances for non-critical workloads
+   - Right-size based on usage patterns
+   - Implement auto-scaling
+
+2. **Storage**:
+   - Use S3 lifecycle policies
+   - Implement data retention
+   - Monitor storage usage
+
+3. **DynamoDB**:
+   - Use on-demand billing for variable workloads
+   - Implement auto-scaling
+   - Monitor capacity usage
+
+## Support
+
+For issues and questions:
+
+1. Check the [deployment guide](MASKTERIAL_DEPLOYMENT_GUIDE.md)
+2. Review CloudWatch logs
+3. Open an issue in the repository
+4. Contact the development team
+
+## References
+
+- [MaskTerial Paper](https://arxiv.org/abs/2412.09333)
+- [MaskTerial GitHub](https://github.com/Jaluus/MaskTerial)
+- [AWS CDK Documentation](https://docs.aws.amazon.com/cdk/)
+- [Flask Documentation](https://flask.palletsprojects.com/)
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
