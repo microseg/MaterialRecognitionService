@@ -1,0 +1,45 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Log files
+*.log
+app.log
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Security - Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+id_rsa*
+*.ppk
+
+# AWS credentials and config
+.aws/
+aws.config
+credentials
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.development
+
+# Secrets and sensitive data
+secrets/
+*.secret
+config.json
