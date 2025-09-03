@@ -1,11 +1,13 @@
 FROM public.ecr.aws/docker/library/python:3.11-slim
 
-# Install system dependencies including git
+# Install system dependencies including git, wget, unzip
 RUN apt-get update && apt-get install -y \
     git \
     gcc \
     g++ \
     make \
+    wget \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -29,6 +31,34 @@ RUN git clone https://github.com/Jaluus/MaskTerial.git /opt/maskterial
 # Install MaskTerial
 RUN pip install -e /opt/maskterial/
 
+# Create model directory
+RUN mkdir -p /opt/maskterial/models
+
+# Download pre-trained models from Zenodo
+# Using a few key models for different materials
+RUN cd /opt/maskterial/models && \
+    # Download segmentation models (SEG_M2F_*)
+    wget -O SEG_M2F_GrapheneH.zip "https://zenodo.org/records/15765516/files/SEG_M2F_GrapheneH.zip?download=1" && \
+    wget -O SEG_M2F_GrapheneL.zip "https://zenodo.org/records/15765516/files/SEG_M2F_GrapheneL.zip?download=1" && \
+    wget -O SEG_M2F_hBN_Thin.zip "https://zenodo.org/records/15765516/files/SEG_M2F_hBN_Thin.zip?download=1" && \
+    wget -O SEG_M2F_WS2.zip "https://zenodo.org/records/15765516/files/SEG_M2F_WS2.zip?download=1" && \
+    # Download classification models (CLS_AMM_*)
+    wget -O CLS_AMM_GrapheneH.zip "https://zenodo.org/records/15765516/files/CLS_AMM_GrapheneH.zip?download=1" && \
+    wget -O CLS_AMM_GrapheneL.zip "https://zenodo.org/records/15765516/files/CLS_AMM_GrapheneL.zip?download=1" && \
+    wget -O CLS_AMM_hBN_Thin.zip "https://zenodo.org/records/15765516/files/CLS_AMM_hBN_Thin.zip?download=1" && \
+    wget -O CLS_AMM_WS2.zip "https://zenodo.org/records/15765516/files/CLS_AMM_WS2.zip?download=1" && \
+    # Extract all models
+    unzip -o SEG_M2F_GrapheneH.zip && \
+    unzip -o SEG_M2F_GrapheneL.zip && \
+    unzip -o SEG_M2F_hBN_Thin.zip && \
+    unzip -o SEG_M2F_WS2.zip && \
+    unzip -o CLS_AMM_GrapheneH.zip && \
+    unzip -o CLS_AMM_GrapheneL.zip && \
+    unzip -o CLS_AMM_hBN_Thin.zip && \
+    unzip -o CLS_AMM_WS2.zip && \
+    # Clean up zip files
+    rm *.zip
+
 # Install Flask and other web dependencies
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt \
@@ -37,8 +67,13 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
 # Copy application code
 COPY . /app
 
+# Set environment variables for MaskTerial
+ENV MODEL_PATH=/opt/maskterial/models
 ENV PORT=5000
 EXPOSE 5000
+
+# Verify models are properly set up
+RUN python verify_models.py
 
 CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "--timeout", "300", "app:app"]
 
