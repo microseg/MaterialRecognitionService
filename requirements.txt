@@ -7,14 +7,6 @@ numpy==1.24.3
 requests==2.31.0
 python-dotenv==1.0.0
 
-# MaskTerial dependencies
-torch==2.5.1
-torchvision==0.20.1
-torchaudio==2.5.1
-detectron2 @ git+https://github.com/facebookresearch/detectron2.git@8d85329aed8506ea3672e3e208971345973ea761
-panopticapi @ git+https://github.com/cocodataset/panopticapi.git@7bb4655548f98f3fedc07bf37e9040a992b054b0
-cityscapesScripts @ git+https://github.com/mcordts/cityscapesScripts.git@067792b80e446e809dd5516ee80d39fa92e18269
-
 # Additional dependencies for image processing
 scikit-image==0.21.0
 matplotlib==3.7.2
