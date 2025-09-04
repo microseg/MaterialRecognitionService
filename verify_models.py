@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Script to verify MaskTerial models are properly downloaded and set up
 """
@@ -11,25 +12,25 @@ def check_model_directory():
     """Check if model directory exists and contains models"""
     model_path = os.environ.get('MODEL_PATH', '/opt/maskterial/models')
     
-    print(f"🔍 Checking model directory: {model_path}")
+    print(f"Checking model directory: {model_path}")
     
     if not os.path.exists(model_path):
-        print(f"❌ Model directory does not exist: {model_path}")
+        print(f"ERROR: Model directory does not exist: {model_path}")
         return False
     
-    print(f"✅ Model directory exists: {model_path}")
+    print(f"OK: Model directory exists: {model_path}")
     
     # List all files in model directory
     model_files = glob.glob(os.path.join(model_path, "*"))
-    print(f"\n📁 Found {len(model_files)} files in model directory:")
+    print(f"Found {len(model_files)} files in model directory:")
     
     for file_path in model_files:
         file_name = os.path.basename(file_path)
         if os.path.isdir(file_path):
-            print(f"   📂 {file_name}/")
+            print(f"  DIR: {file_name}/")
         else:
             size = os.path.getsize(file_path)
-            print(f"   📄 {file_name} ({size:,} bytes)")
+            print(f"  FILE: {file_name} ({size:,} bytes)")
     
     return True
 
@@ -37,10 +38,10 @@ def check_maskterial_import():
     """Check if MaskTerial can be imported and find the correct class"""
     try:
         import maskterial
-        print("✅ MaskTerial module imported successfully")
+        print("OK: MaskTerial module imported successfully")
         
         # Check what's available in the module
-        print(f"📋 Available in maskterial module: {dir(maskterial)}")
+        print(f"Available in maskterial module: {dir(maskterial)}")
         
         # Try to find the detector class - look for MaskTerial specifically
         detector_class = None
@@ -54,14 +55,14 @@ def check_maskterial_import():
                     break
         
         if detector_class:
-            print(f"✅ Found detector class: {detector_class}")
+            print(f"OK: Found detector class: {detector_class}")
             return True, detector_class
         else:
-            print("⚠️  No detector class found in maskterial module")
+            print("WARNING: No detector class found in maskterial module")
             return False, None
             
     except ImportError as e:
-        print(f"❌ Failed to import MaskTerial: {e}")
+        print(f"ERROR: Failed to import MaskTerial: {e}")
         return False, None
 
 def check_detector_initialization():
@@ -76,29 +77,30 @@ def check_detector_initialization():
         detector = None
         for class_name in possible_classes:
             if hasattr(maskterial, class_name):
-                print(f"🔧 Found class: {class_name}")
+                print(f"Found class: {class_name}")
                 detector_class = getattr(maskterial, class_name)
                 try:
                     detector = detector_class(model_path=model_path)
-                    print(f"✅ Successfully initialized {class_name}")
+                    print(f"OK: Successfully initialized {class_name}")
                     break
                 except Exception as e:
-                    print(f"⚠️  Failed to initialize {class_name}: {e}")
+                    print(f"WARNING: Failed to initialize {class_name}: {e}")
                     continue
         
         if detector:
             return True
         else:
-            print("❌ Could not initialize any detector class")
+            print("ERROR: Could not initialize any detector class")
             return False
             
     except Exception as e:
-        print(f"❌ Failed to initialize detector: {e}")
+        print(f"ERROR: Failed to initialize detector: {e}")
         return False
 
 def main():
     """Main verification function"""
-    print("🧪 MaskTerial Model Verification\n")
+    print("MaskTerial Model Verification")
+    print("=" * 50)
     
     # Check model directory
     dir_ok = check_model_directory()
@@ -111,16 +113,16 @@ def main():
     if import_ok:
         init_ok = check_detector_initialization()
     
-    print(f"\n📊 Verification Results:")
-    print(f"   Model Directory: {'✅ PASS' if dir_ok else '❌ FAIL'}")
-    print(f"   MaskTerial Import: {'✅ PASS' if import_ok else '❌ FAIL'}")
-    print(f"   Detector Initialization: {'✅ PASS' if init_ok else '❌ FAIL'}")
+    print("\nVerification Results:")
+    print(f"  Model Directory: {'PASS' if dir_ok else 'FAIL'}")
+    print(f"  MaskTerial Import: {'PASS' if import_ok else 'FAIL'}")
+    print(f"  Detector Initialization: {'PASS' if init_ok else 'FAIL'}")
     
     if dir_ok and import_ok and init_ok:
-        print("\n🎉 All verifications passed! MaskTerial is ready to use.")
+        print("\nSUCCESS: All verifications passed! MaskTerial is ready to use.")
         sys.exit(0)
     else:
-        print("\n💥 Some verifications failed. Please check the setup.")
+        print("\nERROR: Some verifications failed. Please check the setup.")
         sys.exit(1)
 
 if __name__ == "__main__":
