@@ -166,22 +166,73 @@ def test_detector_initialization():
         
         # Try to initialize the detector
         if hasattr(maskterial, 'MaskTerial'):
-            detector_class = getattr(maskterial, 'MaskTerial')
             try:
-                # Try initialization without model_path first
-                detector = detector_class()
-                print("✅ MaskTerial detector initialized successfully")
-                return True
-            except Exception as e:
-                print(f"⚠️  Failed to initialize without parameters: {e}")
+                from maskterial.utils.loader_functions import load_models
+                
+                # Try to load models using the load_models function
                 try:
-                    # Try with model_path as fallback
-                    detector = detector_class(model_path=model_path)
-                    print("✅ MaskTerial detector initialized with model_path")
+                    # Try to load segmentation and classification models
+                    seg_model, cls_model, pp_model = load_models(
+                        cls_model_type="AMM",
+                        cls_model_root=model_path,
+                        seg_model_type="M2F", 
+                        seg_model_root=model_path,
+                        device="cpu"
+                    )
+                    
+                    # Initialize MaskTerial with loaded models
+                    detector = maskterial.MaskTerial(
+                        segmentation_model=seg_model,
+                        classification_model=cls_model,
+                        postprocessing_model=pp_model,
+                        device="cpu"
+                    )
+                    print("✅ MaskTerial detector initialized with all models")
                     return True
-                except Exception as e2:
-                    print(f"❌ Failed to initialize with model_path: {e2}")
-                    return False
+                    
+                except Exception as e:
+                    print(f"⚠️  Failed to load all models: {e}")
+                    
+                    # Try with just classification model
+                    try:
+                        seg_model, cls_model, pp_model = load_models(
+                            cls_model_type="AMM",
+                            cls_model_root=model_path,
+                            device="cpu"
+                        )
+                        
+                        detector = maskterial.MaskTerial(
+                            classification_model=cls_model,
+                            device="cpu"
+                        )
+                        print("✅ MaskTerial detector initialized with classification model only")
+                        return True
+                        
+                    except Exception as e2:
+                        print(f"⚠️  Failed to load classification model: {e2}")
+                        
+                        # Try with just segmentation model
+                        try:
+                            seg_model, cls_model, pp_model = load_models(
+                                seg_model_type="M2F",
+                                seg_model_root=model_path,
+                                device="cpu"
+                            )
+                            
+                            detector = maskterial.MaskTerial(
+                                segmentation_model=seg_model,
+                                device="cpu"
+                            )
+                            print("✅ MaskTerial detector initialized with segmentation model only")
+                            return True
+                            
+                        except Exception as e3:
+                            print(f"❌ Failed to load any models: {e3}")
+                            return False
+                            
+            except Exception as e:
+                print(f"❌ Failed to initialize detector: {e}")
+                return False
         else:
             print("❌ MaskTerial class not available")
             return False
@@ -212,11 +263,23 @@ def test_basic_detection():
         
         try:
             # Initialize detector
-            detector_class = getattr(maskterial, 'MaskTerial')
             try:
-                detector = detector_class()
-            except Exception:
-                detector = detector_class(model_path=model_path)
+                from maskterial.utils.loader_functions import load_models
+                
+                # Try to load classification model (simpler for testing)
+                seg_model, cls_model, pp_model = load_models(
+                    cls_model_type="AMM",
+                    cls_model_root=model_path,
+                    device="cpu"
+                )
+                
+                detector = maskterial.MaskTerial(
+                    classification_model=cls_model,
+                    device="cpu"
+                )
+            except Exception as e:
+                print(f"⚠️  Failed to initialize detector for testing: {e}")
+                return False
             
             # Perform detection
             print("🔍 Performing test detection...")

@@ -69,38 +69,72 @@ def check_detector_initialization():
     """Check if detector can be initialized"""
     try:
         import maskterial
+        from maskterial.utils.loader_functions import load_models
         model_path = os.environ.get('MODEL_PATH', '/opt/maskterial/models')
         
-        # Try different possible class names - MaskTerial should be the main one
-        possible_classes = ['MaskTerial', 'MaskTerialDetector', 'Detector', 'MaterialDetector']
+        print("Loading MaskTerial models...")
         
-        detector = None
-        for class_name in possible_classes:
-            if hasattr(maskterial, class_name):
-                print(f"Found class: {class_name}")
-                detector_class = getattr(maskterial, class_name)
-                try:
-                    # Try initialization without model_path first
-                    detector = detector_class()
-                    print(f"OK: Successfully initialized {class_name}")
-                    break
-                except Exception as e:
-                    print(f"WARNING: Failed to initialize {class_name} without parameters: {e}")
-                    try:
-                        # Try with model_path as a fallback
-                        detector = detector_class(model_path=model_path)
-                        print(f"OK: Successfully initialized {class_name} with model_path")
-                        break
-                    except Exception as e2:
-                        print(f"WARNING: Failed to initialize {class_name} with model_path: {e2}")
-                        continue
-        
-        if detector:
-            return True
-        else:
-            print("ERROR: Could not initialize any detector class")
-            return False
+        # Try to load models using the load_models function
+        try:
+            # Try to load segmentation and classification models
+            seg_model, cls_model, pp_model = load_models(
+                cls_model_type="AMM",
+                cls_model_root=model_path,
+                seg_model_type="M2F", 
+                seg_model_root=model_path,
+                device="cpu"
+            )
             
+            # Initialize MaskTerial with loaded models
+            detector = maskterial.MaskTerial(
+                segmentation_model=seg_model,
+                classification_model=cls_model,
+                postprocessing_model=pp_model,
+                device="cpu"
+            )
+            print("OK: Successfully initialized MaskTerial with all models")
+            return True
+            
+        except Exception as e:
+            print(f"WARNING: Failed to load all models: {e}")
+            
+            # Try with just classification model
+            try:
+                seg_model, cls_model, pp_model = load_models(
+                    cls_model_type="AMM",
+                    cls_model_root=model_path,
+                    device="cpu"
+                )
+                
+                detector = maskterial.MaskTerial(
+                    classification_model=cls_model,
+                    device="cpu"
+                )
+                print("OK: Successfully initialized MaskTerial with classification model only")
+                return True
+                
+            except Exception as e2:
+                print(f"WARNING: Failed to load classification model: {e2}")
+                
+                # Try with just segmentation model
+                try:
+                    seg_model, cls_model, pp_model = load_models(
+                        seg_model_type="M2F",
+                        seg_model_root=model_path,
+                        device="cpu"
+                    )
+                    
+                    detector = maskterial.MaskTerial(
+                        segmentation_model=seg_model,
+                        device="cpu"
+                    )
+                    print("OK: Successfully initialized MaskTerial with segmentation model only")
+                    return True
+                    
+                except Exception as e3:
+                    print(f"ERROR: Failed to load any models: {e3}")
+                    return False
+        
     except Exception as e:
         print(f"ERROR: Failed to initialize detector: {e}")
         return False

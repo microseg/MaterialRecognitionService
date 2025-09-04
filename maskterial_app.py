@@ -108,18 +108,69 @@ class MockMaskTerialDetector:
 # Initialize detector
 if MASKTERIAL_AVAILABLE:
     try:
-        # Try initialization without model_path first
-        detector = MaskTerialDetector()
-        logger.info("MaskTerial detector initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize MaskTerial detector without parameters: {e}")
+        from maskterial.utils.loader_functions import load_models
+        
+        # Try to load models using the load_models function
         try:
-            # Try with model_path as fallback
-            detector = MaskTerialDetector(model_path=MODEL_PATH)
-            logger.info(f"MaskTerial detector initialized with model path: {MODEL_PATH}")
-        except Exception as e2:
-            logger.error(f"Failed to initialize MaskTerial detector with model_path: {e2}")
-            detector = MockMaskTerialDetector(MODEL_PATH)
+            # Try to load segmentation and classification models
+            seg_model, cls_model, pp_model = load_models(
+                cls_model_type="AMM",
+                cls_model_root=MODEL_PATH,
+                seg_model_type="M2F", 
+                seg_model_root=MODEL_PATH,
+                device="cpu"
+            )
+            
+            # Initialize MaskTerial with loaded models
+            detector = MaskTerialDetector(
+                segmentation_model=seg_model,
+                classification_model=cls_model,
+                postprocessing_model=pp_model,
+                device="cpu"
+            )
+            logger.info("MaskTerial detector initialized with all models")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load all models: {e}")
+            
+            # Try with just classification model
+            try:
+                seg_model, cls_model, pp_model = load_models(
+                    cls_model_type="AMM",
+                    cls_model_root=MODEL_PATH,
+                    device="cpu"
+                )
+                
+                detector = MaskTerialDetector(
+                    classification_model=cls_model,
+                    device="cpu"
+                )
+                logger.info("MaskTerial detector initialized with classification model only")
+                
+            except Exception as e2:
+                logger.warning(f"Failed to load classification model: {e2}")
+                
+                # Try with just segmentation model
+                try:
+                    seg_model, cls_model, pp_model = load_models(
+                        seg_model_type="M2F",
+                        seg_model_root=MODEL_PATH,
+                        device="cpu"
+                    )
+                    
+                    detector = MaskTerialDetector(
+                        segmentation_model=seg_model,
+                        device="cpu"
+                    )
+                    logger.info("MaskTerial detector initialized with segmentation model only")
+                    
+                except Exception as e3:
+                    logger.error(f"Failed to load any models: {e3}")
+                    detector = MockMaskTerialDetector(MODEL_PATH)
+                    
+    except Exception as e:
+        logger.error(f"Failed to initialize MaskTerial detector: {e}")
+        detector = MockMaskTerialDetector(MODEL_PATH)
 else:
     detector = MockMaskTerialDetector(MODEL_PATH)
 
