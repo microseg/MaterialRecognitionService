@@ -31,11 +31,66 @@ AWS_REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'matsight-customer-images')
 DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 'CustomerImages')
 MODEL_PATH = os.environ.get('MODEL_PATH', '/opt/maskterial/models')
+MODELS_S3_BUCKET = os.environ.get('MODELS_S3_BUCKET', 'matsight-maskterial-models-v2')
 
 # Initialize AWS clients
 s3_client = boto3.client('s3', region_name=AWS_REGION)
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
 table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+
+def download_models_from_s3():
+    """Download MaskTerial models from S3 if they don't exist locally"""
+    try:
+        # Create model directory if it doesn't exist
+        os.makedirs(MODEL_PATH, exist_ok=True)
+        
+        # List of required model files
+        required_models = [
+            'SEG_M2F_GrapheneH/config.yaml',
+            'SEG_M2F_GrapheneH/model_final.pth',
+            'SEG_M2F_GrapheneH/cov.npy',
+            'SEG_M2F_GrapheneH/loc.npy',
+            'SEG_M2F_GrapheneH/meta_data.json',
+            'SEG_M2F_GrapheneH/model.pth',
+            'CLS_AMM_GrapheneH/config.yaml',
+            'CLS_AMM_GrapheneH/model_final.pth',
+            'CLS_AMM_GrapheneH/cov.npy',
+            'CLS_AMM_GrapheneH/loc.npy',
+            'CLS_AMM_GrapheneH/meta_data.json',
+            'CLS_AMM_GrapheneH/model.pth'
+        ]
+        
+        downloaded_count = 0
+        for model_file in required_models:
+            local_path = os.path.join(MODEL_PATH, model_file)
+            
+            # Check if file already exists
+            if os.path.exists(local_path):
+                logger.info(f"Model file already exists: {model_file}")
+                continue
+            
+            # Create directory if needed
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            
+            try:
+                # Download from S3
+                s3_client.download_file(MODELS_S3_BUCKET, model_file, local_path)
+                logger.info(f"Downloaded model file: {model_file}")
+                downloaded_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to download {model_file}: {e}")
+        
+        if downloaded_count > 0:
+            logger.info(f"Downloaded {downloaded_count} model files from S3")
+        else:
+            logger.info("All model files already exist locally")
+            
+    except Exception as e:
+        logger.error(f"Error downloading models from S3: {e}")
+        logger.warning("Continuing with local models only")
+
+# Download models at startup
+download_models_from_s3()
 
 # MaskTerial model imports (these will be available after installation)
 try:
@@ -262,6 +317,7 @@ def health():
         "aws_region": AWS_REGION,
         "s3_bucket": S3_BUCKET_NAME,
         "dynamodb_table": DYNAMODB_TABLE_NAME,
+        "models_s3_bucket": MODELS_S3_BUCKET,
         "timestamp": datetime.now().isoformat()
     })
 
@@ -487,7 +543,8 @@ def info():
         "aws_configuration": {
             "region": AWS_REGION,
             "s3_bucket": S3_BUCKET_NAME,
-            "dynamodb_table": DYNAMODB_TABLE_NAME
+            "dynamodb_table": DYNAMODB_TABLE_NAME,
+            "models_s3_bucket": MODELS_S3_BUCKET
         },
         "endpoints": {
             "health": "/health",
