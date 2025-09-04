@@ -167,9 +167,21 @@ def test_detector_initialization():
         # Try to initialize the detector
         if hasattr(maskterial, 'MaskTerial'):
             detector_class = getattr(maskterial, 'MaskTerial')
-            detector = detector_class(model_path=model_path)
-            print("✅ MaskTerial detector initialized successfully")
-            return True
+            try:
+                # Try initialization without model_path first
+                detector = detector_class()
+                print("✅ MaskTerial detector initialized successfully")
+                return True
+            except Exception as e:
+                print(f"⚠️  Failed to initialize without parameters: {e}")
+                try:
+                    # Try with model_path as fallback
+                    detector = detector_class(model_path=model_path)
+                    print("✅ MaskTerial detector initialized with model_path")
+                    return True
+                except Exception as e2:
+                    print(f"❌ Failed to initialize with model_path: {e2}")
+                    return False
         else:
             print("❌ MaskTerial class not available")
             return False
@@ -201,7 +213,10 @@ def test_basic_detection():
         try:
             # Initialize detector
             detector_class = getattr(maskterial, 'MaskTerial')
-            detector = detector_class(model_path=model_path)
+            try:
+                detector = detector_class()
+            except Exception:
+                detector = detector_class(model_path=model_path)
             
             # Perform detection
             print("🔍 Performing test detection...")

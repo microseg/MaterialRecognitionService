@@ -108,11 +108,18 @@ class MockMaskTerialDetector:
 # Initialize detector
 if MASKTERIAL_AVAILABLE:
     try:
-        detector = MaskTerialDetector(model_path=MODEL_PATH)
-        logger.info(f"MaskTerial detector initialized with model path: {MODEL_PATH}")
+        # Try initialization without model_path first
+        detector = MaskTerialDetector()
+        logger.info("MaskTerial detector initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize MaskTerial detector: {e}")
-        detector = MockMaskTerialDetector(MODEL_PATH)
+        logger.error(f"Failed to initialize MaskTerial detector without parameters: {e}")
+        try:
+            # Try with model_path as fallback
+            detector = MaskTerialDetector(model_path=MODEL_PATH)
+            logger.info(f"MaskTerial detector initialized with model path: {MODEL_PATH}")
+        except Exception as e2:
+            logger.error(f"Failed to initialize MaskTerial detector with model_path: {e2}")
+            detector = MockMaskTerialDetector(MODEL_PATH)
 else:
     detector = MockMaskTerialDetector(MODEL_PATH)
 

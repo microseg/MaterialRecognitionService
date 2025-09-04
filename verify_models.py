@@ -80,12 +80,20 @@ def check_detector_initialization():
                 print(f"Found class: {class_name}")
                 detector_class = getattr(maskterial, class_name)
                 try:
-                    detector = detector_class(model_path=model_path)
+                    # Try initialization without model_path first
+                    detector = detector_class()
                     print(f"OK: Successfully initialized {class_name}")
                     break
                 except Exception as e:
-                    print(f"WARNING: Failed to initialize {class_name}: {e}")
-                    continue
+                    print(f"WARNING: Failed to initialize {class_name} without parameters: {e}")
+                    try:
+                        # Try with model_path as a fallback
+                        detector = detector_class(model_path=model_path)
+                        print(f"OK: Successfully initialized {class_name} with model_path")
+                        break
+                    except Exception as e2:
+                        print(f"WARNING: Failed to initialize {class_name} with model_path: {e2}")
+                        continue
         
         if detector:
             return True
