@@ -373,7 +373,7 @@ def detect_image():
             # Prepare metadata
             metadata = {
                 "customerID": customer_id,
-                "imageID": image_id,
+                "imageId": image_id,
                 "createdAt": timestamp,
                 "type": "UPLOADED",
                 "s3Key": original_key,
@@ -482,7 +482,7 @@ def detect_from_s3():
             # Prepare metadata
             metadata = {
                 "customerID": customer_id,
-                "imageID": image_id,
+                "imageId": image_id,
                 "createdAt": timestamp,
                 "type": "SAVED_RESULT",
                 "s3Key": result_key,
