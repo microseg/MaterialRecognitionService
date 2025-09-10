@@ -1,27 +1,16 @@
-FROM python:3.10-slim
-
+# Kept for your pipeline’s finder logic; identical to Dockerfile.
+FROM public.ecr.aws/docker/library/python:3.10-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
-
-# OS deps for OpenCV + common libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git curl ca-certificates \
     libglib2.0-0 libsm6 libxext6 libxrender1 libjpeg62-turbo \
  && rm -rf /var/lib/apt/lists/*
-
-# Python deps
 COPY requirements.txt /app/
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
-
-# (Optional) CPU PyTorch + MaskTerial — best-effort so builds don’t fail
-# Remove "|| true" once your stack is ready for full install.
 RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio || true
 RUN pip install "git+https://github.com/Jaluus/MaskTerial.git#egg=maskterial" || true
-
-# App
 COPY app.py /app/
-
-# Runtime
 ENV PORT=5000 MODEL_PATH=/opt/maskterial/models
 EXPOSE 5000
 CMD ["gunicorn","-w","2","-b","0.0.0.0:5000","app:app","--timeout","300"]

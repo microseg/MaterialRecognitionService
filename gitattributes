@@ -1,0 +1,4 @@
+# Keep scripts and Dockerfiles with LF endings on Windows
+*.sh text eol=lf
+Dockerfile* text eol=lf
+*.yml text eol=lf
