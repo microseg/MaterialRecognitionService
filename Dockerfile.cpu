@@ -83,4 +83,4 @@ ENV PYTHONPATH=/opt/maskterial:$PYTHONPATH
 EXPOSE 5000
 
 # Use conda environment for the final command
-CMD ["conda", "run", "-n", "maskterial", "gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "--timeout", "300", "maskterial_app:app"]
+CMD ["conda", "run", "-n", "maskterial", "gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "--timeout", "300", "app:app"]

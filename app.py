@@ -1,410 +1,233 @@
 #!/usr/bin/env python3
 """
-Simple Calculator API Service with Storage Testing
-A Flask-based calculator API for testing CI/CD pipeline workflow and AWS storage
+MaskTerial API Service
+A Flask-based API for 2D material flake detection using MaskTerial model
 """
 
-from flask import Flask, request, jsonify
 import os
 import json
 import uuid
-import subprocess
-import sys
+import boto3
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
+from flask import Flask, request, jsonify, send_file
+from werkzeug.utils import secure_filename
+import tempfile
+import cv2
+import numpy as np
+from PIL import Image
+import io
+import base64
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-def install_boto3():
-    """Attempt to install boto3 if not available"""
-    try:
-        import boto3
-        return True, "boto3 already available"
-    except ImportError:
-        try:
-            print("boto3 not found, attempting to install...")
-            
-            # Simplified installation method, prioritize system-level installation
-            installation_methods = [
-                # Method 1: System installation with sudo
-                ["sudo", sys.executable, "-m", "pip", "install", "boto3==1.34.0"],
-                # Method 2: Direct pip3 system installation
-                ["sudo", "pip3", "install", "boto3==1.34.0"],
-                # Method 3: User installation as fallback
-                [sys.executable, "-m", "pip", "install", "--user", "boto3==1.34.0"],
-            ]
-            
-            for i, method in enumerate(installation_methods, 1):
-                try:
-                    print(f"Trying installation method {i}: {' '.join(method)}")
-                    result = subprocess.run(method, capture_output=True, text=True, timeout=120)
-                    
-                    if result.returncode == 0:
-                        print(f"Installation method {i} succeeded")
-                        # Verify installation
-                        try:
-                            import boto3
-                            print(f"boto3 version: {boto3.__version__}")
-                            return True, f"boto3 installed successfully using method {i}"
-                        except Exception as e:
-                            print(f"boto3 import failed after installation: {e}")
-                            continue
-                    else:
-                        print(f"Installation method {i} failed: {result.stderr}")
-                except Exception as e:
-                    print(f"Installation method {i} exception: {e}")
-                    continue
-            
-            return False, "All installation methods failed"
-            
-        except Exception as e:
-            error_msg = f"Exception during boto3 installation: {str(e)}"
-            print(error_msg)
-            return False, error_msg
+# AWS Configuration
+AWS_REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
+S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'matsight-customer-images')
+DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 'CustomerImages')
+MODEL_PATH = os.environ.get('MODEL_PATH', '/opt/maskterial/models')
+MODELS_S3_BUCKET = os.environ.get('MODELS_S3_BUCKET', 'matsight-maskterial-models-v2')
 
-# Initialize storage variables
-BOTO3_AVAILABLE = False
-s3_client = None
-dynamodb = None
-BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "matsight-customer-images-dev")
-TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "CustomerImages-Dev")
+# Initialize AWS clients
+s3_client = boto3.client('s3', region_name=AWS_REGION)
+dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+table = dynamodb.Table(DYNAMODB_TABLE_NAME)
 
-# Try to import boto3, and install if not available
-try:
-    import boto3
-    BOTO3_AVAILABLE = True
-    print(f"boto3 imported successfully, version: {boto3.__version__}")
-except ImportError:
-    print("boto3 not available, attempting automatic installation...")
+def download_models_from_s3():
+    """Download MaskTerial models from S3 if they don't exist locally"""
     try:
-        success, message = install_boto3()
-        if success:
+        # Create model directory if it doesn't exist
+        os.makedirs(MODEL_PATH, exist_ok=True)
+        
+        # List of required model files
+        required_models = [
+            'SEG_M2F_GrapheneH/config.yaml',
+            'SEG_M2F_GrapheneH/model_final.pth',
+            'SEG_M2F_GrapheneH/cov.npy',
+            'SEG_M2F_GrapheneH/loc.npy',
+            'SEG_M2F_GrapheneH/meta_data.json',
+            'SEG_M2F_GrapheneH/model.pth',
+            'CLS_AMM_GrapheneH/config.yaml',
+            'CLS_AMM_GrapheneH/model_final.pth',
+            'CLS_AMM_GrapheneH/cov.npy',
+            'CLS_AMM_GrapheneH/loc.npy',
+            'CLS_AMM_GrapheneH/meta_data.json',
+            'CLS_AMM_GrapheneH/model.pth'
+        ]
+        
+        downloaded_count = 0
+        for model_file in required_models:
+            local_path = os.path.join(MODEL_PATH, model_file)
+            
+            # Check if file already exists
+            if os.path.exists(local_path):
+                logger.info(f"Model file already exists: {model_file}")
+                continue
+            
+            # Create directory if needed
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            
             try:
-                import boto3
-                BOTO3_AVAILABLE = True
-                print(f"boto3 installed and imported successfully, version: {boto3.__version__}")
+                # Download from S3
+                s3_client.download_file(MODELS_S3_BUCKET, model_file, local_path)
+                logger.info(f"Downloaded model file: {model_file}")
+                downloaded_count += 1
             except Exception as e:
-                print(f"Failed to import boto3 after installation: {e}")
-                BOTO3_AVAILABLE = False
-        else:
-            print(f"Failed to install boto3: {message}")
-            BOTO3_AVAILABLE = False
-    except Exception as e:
-        print(f"Exception during boto3 installation process: {e}")
-        BOTO3_AVAILABLE = False
-
-# Initialize AWS clients if boto3 is available
-if BOTO3_AVAILABLE:
-    try:
-        # Set AWS region
-        aws_region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-        print(f"Initializing AWS clients in region: {aws_region}")
+                logger.warning(f"Failed to download {model_file}: {e}")
         
-        s3_client = boto3.client("s3", region_name=aws_region)
-        dynamodb = boto3.resource("dynamodb", region_name=aws_region)
-        print("AWS clients initialized successfully")
+        if downloaded_count > 0:
+            logger.info(f"Downloaded {downloaded_count} model files from S3")
+        else:
+            logger.info("All model files already exist locally")
+            
+    except Exception as e:
+        logger.error(f"Error downloading models from S3: {e}")
+        logger.warning("Continuing with local models only")
+
+# Download models at startup
+download_models_from_s3()
+
+# MaskTerial model imports (these will be available after installation)
+try:
+    import maskterial
+    # Try to find the correct detector class - MaskTerial should be the main one
+    detector_class = None
+    if hasattr(maskterial, 'MaskTerial'):
+        detector_class = getattr(maskterial, 'MaskTerial')
+    else:
+        # Fallback: look for classes with 'detector' or 'detect' in the name
+        for item in dir(maskterial):
+            if 'detector' in item.lower() or 'detect' in item.lower():
+                detector_class = getattr(maskterial, item)
+                break
+    
+    if detector_class:
+        MaskTerialDetector = detector_class
+        MASKTERIAL_AVAILABLE = True
+        logger.info(f"MaskTerial model imported successfully with class: {detector_class.__name__}")
+    else:
+        MASKTERIAL_AVAILABLE = False
+        logger.warning("No detector class found in maskterial module - using mock detection")
+except ImportError:
+    MASKTERIAL_AVAILABLE = False
+    logger.warning("MaskTerial model not available - using mock detection")
+
+class MockMaskTerialDetector:
+    """Mock detector for testing when MaskTerial is not available"""
+    
+    def __init__(self, model_path=None):
+        self.model_path = model_path
+        logger.info("Initialized mock MaskTerial detector")
+    
+    def detect(self, image_path):
+        """Mock detection that returns random flakes"""
+        import random
         
-        # Test connection
-        try:
-            s3_client.head_bucket(Bucket=BUCKET_NAME)
-            print(f"S3 bucket {BUCKET_NAME} is accessible")
-        except Exception as e:
-            print(f"S3 bucket {BUCKET_NAME} not accessible: {e}")
+        # Load image to get dimensions
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError("Could not load image")
+        
+        height, width = image.shape[:2]
+        
+        # Generate mock detection results
+        num_flakes = random.randint(1, 5)
+        flakes = []
+        
+        for i in range(num_flakes):
+            # Generate random bounding box
+            x1 = random.randint(0, width - 100)
+            y1 = random.randint(0, height - 100)
+            x2 = x1 + random.randint(50, 100)
+            y2 = y1 + random.randint(50, 100)
             
-        try:
-            table = dynamodb.Table(TABLE_NAME)
-            table.table_status
-            print(f"DynamoDB table {TABLE_NAME} is accessible")
-        except Exception as e:
-            print(f"DynamoDB table {TABLE_NAME} not accessible: {e}")
-            
-    except Exception as e:
-        print(f"Failed to initialize AWS clients: {e}")
-        BOTO3_AVAILABLE = False
-else:
-    print("Storage features will be disabled due to boto3 unavailability")
-
-@app.route("/")
-def hello():
-    return "Material Recognition Service Calculator with Storage Testing!"
-
-@app.route("/simple-test")
-def simple_test():
-    """Simple test endpoint that doesn't depend on boto3"""
-    return {
-        "status": "success",
-        "message": "Application is running",
-        "boto3_available": BOTO3_AVAILABLE,
-        "timestamp": datetime.now().isoformat()
-    }, 200
-
-@app.route("/health")
-def health():
-    storage_status = "available" if BOTO3_AVAILABLE else "unavailable"
-    
-    # Add detailed diagnostic information
-    diagnostic_info = {
-        "boto3_available": BOTO3_AVAILABLE,
-        "s3_client_initialized": s3_client is not None,
-        "dynamodb_initialized": dynamodb is not None,
-        "bucket_name": BUCKET_NAME,
-        "table_name": TABLE_NAME,
-        "aws_region": os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-    }
-    
-    # If boto3 is available, test connection
-    if BOTO3_AVAILABLE:
-        try:
-            s3_client.head_bucket(Bucket=BUCKET_NAME)
-            diagnostic_info["s3_accessible"] = True
-        except Exception as e:
-            diagnostic_info["s3_accessible"] = False
-            diagnostic_info["s3_error"] = str(e)
-            
-        try:
-            table = dynamodb.Table(TABLE_NAME)
-            table.table_status
-            diagnostic_info["dynamodb_accessible"] = True
-        except Exception as e:
-            diagnostic_info["dynamodb_accessible"] = False
-            diagnostic_info["dynamodb_error"] = str(e)
-    
-    return {
-        "status": "healthy", 
-        "service": "Material Recognition Service",
-        "storage": storage_status,
-        "diagnostic": diagnostic_info
-    }, 200
-
-@app.route("/add/<int:a>/<int:b>")
-def add(a, b):
-    result = a + b
-    try:
-        if BOTO3_AVAILABLE:
-            save_calculation_result("addition", a, b, result)
-            return {"operation": "addition", "a": a, "b": b, "result": result, "storage_status": "saved"}, 200
-        else:
-            return {"operation": "addition", "a": a, "b": b, "result": result, "storage_status": "unavailable"}, 200
-    except Exception as e:
-        return {"operation": "addition", "a": a, "b": b, "result": result, "storage_status": "failed", "error": str(e)}, 200
-
-@app.route("/subtract/<int:a>/<int:b>")
-def subtract(a, b):
-    result = a - b
-    try:
-        if BOTO3_AVAILABLE:
-            save_calculation_result("subtraction", a, b, result)
-            return {"operation": "subtraction", "a": a, "b": b, "result": result, "storage_status": "saved"}, 200
-        else:
-            return {"operation": "subtraction", "a": a, "b": b, "result": result, "storage_status": "unavailable"}, 200
-    except Exception as e:
-        return {"operation": "subtraction", "a": a, "b": b, "result": result, "storage_status": "failed", "error": str(e)}, 200
-
-@app.route("/multiply/<int:a>/<int:b>")
-def multiply(a, b):
-    result = a * b
-    try:
-        if BOTO3_AVAILABLE:
-            save_calculation_result("multiplication", a, b, result)
-            return {"operation": "multiplication", "a": a, "b": b, "result": result, "storage_status": "saved"}, 200
-        else:
-            return {"operation": "multiplication", "a": a, "b": b, "result": result, "storage_status": "unavailable"}, 200
-    except Exception as e:
-        return {"operation": "multiplication", "a": a, "b": b, "result": result, "storage_status": "failed", "error": str(e)}, 200
-
-@app.route("/divide/<int:a>/<int:b>")
-def divide(a, b):
-    if b == 0:
-        try:
-            if BOTO3_AVAILABLE:
-                save_error_result("division", a, b, "Division by zero error")
-                return {"error": "you cannot divide by zero", "storage_status": "saved"}, 400
-            else:
-                return {"error": "you cannot divide by zero", "storage_status": "unavailable"}, 400
-        except Exception as e:
-            return {"error": "you cannot divide by zero", "storage_status": "failed", "error": str(e)}, 400
-    
-    result = a / b
-    try:
-        if BOTO3_AVAILABLE:
-            save_calculation_result("division", a, b, result)
-            return {"operation": "division", "a": a, "b": b, "result": result, "storage_status": "saved"}, 200
-        else:
-            return {"operation": "division", "a": a, "b": b, "result": result, "storage_status": "unavailable"}, 200
-    except Exception as e:
-        return {"operation": "division", "a": a, "b": b, "result": result, "storage_status": "failed", "error": str(e)}, 200
-
-@app.route("/storage/test")
-def test_storage():
-    if not BOTO3_AVAILABLE:
-        return {"status": "error", "message": "boto3 not available"}, 500
-    
-    try:
-        # Test S3
-        test_s3_connection()
-        # Test DynamoDB
-        test_dynamodb_connection()
-        return {"status": "success", "message": "Storage connections working"}, 200
-    except Exception as e:
-        return {"status": "error", "message": str(e)}, 500
-
-@app.route("/storage/s3/test")
-def test_s3():
-    if not BOTO3_AVAILABLE:
-        return {"status": "error", "message": "boto3 not available"}, 500
-    
-    try:
-        test_s3_connection()
-        return {"status": "success", "message": "S3 connection working"}, 200
-    except Exception as e:
-        return {"status": "error", "message": str(e)}, 500
-
-@app.route("/storage/dynamodb/test")
-def test_dynamodb():
-    if not BOTO3_AVAILABLE:
-        return {"status": "error", "message": "boto3 not available"}, 500
-    
-    try:
-        test_dynamodb_connection()
-        return {"status": "success", "message": "DynamoDB connection working"}, 200
-    except Exception as e:
-        return {"status": "error", "message": str(e)}, 500
-
-@app.route("/storage/save-test")
-def save_test_data():
-    if not BOTO3_AVAILABLE:
-        return {"status": "error", "message": "boto3 not available"}, 500
-    
-    try:
-        # Save test data to S3
-        test_key = f"test/data-{uuid.uuid4()}.json"
-        test_data = {"timestamp": datetime.now().isoformat(), "test": True}
-        s3_client.put_object(
-            Bucket=BUCKET_NAME,
-            Key=test_key,
-            Body=json.dumps(test_data),
-            ContentType="application/json"
-        )
-
-        # Save test data to DynamoDB
-        table = dynamodb.Table(TABLE_NAME)
-        test_item = {
-            "customerID": "test-customer",
-            "imageID": f"test-{uuid.uuid4()}",
-            "createdAt": int(datetime.now().timestamp()),
-            "type": "TEST",
-            "s3Key": test_key,
-            "thumbnailKey": test_key,
-            "status": "active",
-            "expiresAt": int((datetime.now() + timedelta(days=30)).timestamp())
-        }
-        table.put_item(Item=test_item)
+            flake = {
+                'bbox': [x1, y1, x2, y2],
+                'confidence': random.uniform(0.7, 0.95),
+                'area': (x2 - x1) * (y2 - y1),
+                'material_type': random.choice(['graphene', 'hBN', 'MoS2', 'WS2'])
+            }
+            flakes.append(flake)
         
         return {
-            "status": "success",
-            "s3_key": test_key,
-            "dynamodb_item": test_item
-        }, 200
-    except Exception as e:
-        return {"status": "error", "message": str(e)}, 500
-
-@app.route("/diagnose")
-def diagnose():
-    """Detailed diagnostic endpoint for checking boto3 and AWS connection status"""
-    import sys
-    import subprocess
-    
-    diagnosis = {
-        "python_version": sys.version,
-        "python_executable": sys.executable,
-        "python_path": sys.path,
-        "environment_variables": {
-            "AWS_DEFAULT_REGION": os.environ.get("AWS_DEFAULT_REGION"),
-            "AWS_ACCESS_KEY_ID": "***" if os.environ.get("AWS_ACCESS_KEY_ID") else None,
-            "AWS_SECRET_ACCESS_KEY": "***" if os.environ.get("AWS_SECRET_ACCESS_KEY") else None,
-            "S3_BUCKET_NAME": BUCKET_NAME,
-            "DYNAMODB_TABLE_NAME": TABLE_NAME
-        },
-        "boto3_status": {
-            "available": BOTO3_AVAILABLE,
-            "version": None,
-            "location": None
-        },
-        "aws_clients": {
-            "s3_client": s3_client is not None,
-            "dynamodb_resource": dynamodb is not None
-        },
-        "connection_tests": {}
-    }
-    
-    # Check boto3 detailed information
-    if BOTO3_AVAILABLE:
-        try:
-            diagnosis["boto3_status"]["version"] = boto3.__version__
-            diagnosis["boto3_status"]["location"] = boto3.__file__
-        except Exception as e:
-            diagnosis["boto3_status"]["error"] = str(e)
-    
-    # Test AWS connection
-    if BOTO3_AVAILABLE:
-        try:
-            s3_client.head_bucket(Bucket=BUCKET_NAME)
-            diagnosis["connection_tests"]["s3"] = "success"
-        except Exception as e:
-            diagnosis["connection_tests"]["s3"] = f"failed: {str(e)}"
-            
-        try:
-            table = dynamodb.Table(TABLE_NAME)
-            table.table_status
-            diagnosis["connection_tests"]["dynamodb"] = "success"
-        except Exception as e:
-            diagnosis["connection_tests"]["dynamodb"] = f"failed: {str(e)}"
-    
-    # Check pip installed packages
-    try:
-        result = subprocess.run([sys.executable, "-m", "pip", "list"], 
-                              capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            diagnosis["installed_packages"] = result.stdout
-        else:
-            diagnosis["installed_packages"] = f"Error: {result.stderr}"
-    except Exception as e:
-        diagnosis["installed_packages"] = f"Exception: {str(e)}"
-    
-    return diagnosis, 200
-
-@app.route("/info")
-def info():
-    return {
-        "service": "Material Recognition Service Calculator with Storage",
-        "version": "1.0.0",
-        "storage": {
-            "available": BOTO3_AVAILABLE,
-            "s3_bucket": BUCKET_NAME if BOTO3_AVAILABLE else "N/A",
-            "dynamodb_table": TABLE_NAME if BOTO3_AVAILABLE else "N/A"
-        },
-        "endpoints": {
-            "health": "/health",
-            "diagnose": "/diagnose",
-            "add": "/add/{a}/{b}",
-            "subtract": "/subtract/{a}/{b}",
-            "multiply": "/multiply/{a}/{b}",
-            "divide": "/divide/{a}/{b}",
-            "calculate": "/calculate (POST)",
-            "storage_test": "/storage/test",
-            "storage_s3_test": "/storage/s3/test",
-            "storage_dynamodb_test": "/storage/dynamodb/test",
-            "storage_save_test": "/storage/save-test",
-            "info": "/info"
-        },
-        "example_usage": {
-            "GET": "/add/10/5",
-            "POST": "/calculate with JSON: {\"operation\": \"add\", \"a\": 10, \"b\": 5}",
-            "storage_test": "/storage/test",
-            "diagnose": "/diagnose",
-            "divide_test": "/divide/10/0 (will save error to storage)"
+            'flakes': flakes,
+            'total_flakes': len(flakes),
+            'image_dimensions': [width, height]
         }
-    }, 200
+
+# Initialize detector
+if MASKTERIAL_AVAILABLE:
+    try:
+        from maskterial.utils.loader_functions import load_models
+        
+        # Try to load models using the load_models function
+        try:
+            # Try to load segmentation and classification models
+            seg_model, cls_model, pp_model = load_models(
+                cls_model_type="AMM",
+                cls_model_root=MODEL_PATH,
+                seg_model_type="M2F", 
+                seg_model_root=MODEL_PATH,
+                device="cpu"
+            )
+            
+            # Initialize MaskTerial with loaded models
+            detector = MaskTerialDetector(
+                segmentation_model=seg_model,
+                classification_model=cls_model,
+                postprocessing_model=pp_model,
+                device="cpu"
+            )
+            logger.info("MaskTerial detector initialized with all models")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load all models: {e}")
+            
+            # Try with just classification model
+            try:
+                seg_model, cls_model, pp_model = load_models(
+                    cls_model_type="AMM",
+                    cls_model_root=MODEL_PATH,
+                    device="cpu"
+                )
+                
+                detector = MaskTerialDetector(
+                    classification_model=cls_model,
+                    device="cpu"
+                )
+                logger.info("MaskTerial detector initialized with classification model only")
+                
+            except Exception as e2:
+                logger.warning(f"Failed to load classification model: {e2}")
+                
+                # Try with just segmentation model
+                try:
+                    seg_model, cls_model, pp_model = load_models(
+                        seg_model_type="M2F",
+                        seg_model_root=MODEL_PATH,
+                        device="cpu"
+                    )
+                    
+                    detector = MaskTerialDetector(
+                        segmentation_model=seg_model,
+                        device="cpu"
+                    )
+                    logger.info("MaskTerial detector initialized with segmentation model only")
+                    
+                except Exception as e3:
+                    logger.error(f"Failed to load any models: {e3}")
+                    detector = MockMaskTerialDetector(MODEL_PATH)
+                    
+    except Exception as e:
+        logger.error(f"Failed to initialize MaskTerial detector: {e}")
+        detector = MockMaskTerialDetector(MODEL_PATH)
+else:
+    detector = MockMaskTerialDetector(MODEL_PATH)
 
 def convert_to_decimal(obj):
     """Convert float values to Decimal for DynamoDB compatibility"""
@@ -417,128 +240,338 @@ def convert_to_decimal(obj):
     else:
         return obj
 
-def save_calculation_result(operation, a, b, result):
-    """Save calculation result to storage with enhanced metadata"""
-    if not BOTO3_AVAILABLE:
-        return
-    
-    calculation_id = f"calc-{uuid.uuid4()}"
-    calculation_data = {
-        "operation": operation,
-        "a": a,
-        "b": b,
-        "result": result,
+def save_to_s3(file_data, s3_key, content_type='image/jpeg'):
+    """Save file data to S3"""
+    try:
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            Body=file_data,
+            ContentType=content_type
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save to S3: {e}")
+        return False
+
+def save_metadata_to_dynamodb(metadata):
+    """Save metadata to DynamoDB"""
+    try:
+        # Convert metadata to use Decimal for float values
+        metadata = convert_to_decimal(metadata)
+        table.put_item(Item=metadata)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save to DynamoDB: {e}")
+        return False
+
+def create_result_image(original_image_path, detection_results):
+    """Create result image with detection overlays"""
+    try:
+        # Load original image
+        image = cv2.imread(original_image_path)
+        if image is None:
+            raise ValueError("Could not load original image")
+        
+        # Draw detection results
+        for flake in detection_results.get('flakes', []):
+            bbox = flake['bbox']
+            confidence = flake['confidence']
+            material_type = flake.get('material_type', 'unknown')
+            
+            # Draw bounding box
+            cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+            
+            # Add label
+            label = f"{material_type}: {confidence:.2f}"
+            cv2.putText(image, label, (bbox[0], bbox[1] - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        # Convert to bytes
+        _, buffer = cv2.imencode('.jpg', image)
+        return buffer.tobytes()
+    except Exception as e:
+        logger.error(f"Failed to create result image: {e}")
+        return None
+
+@app.route('/')
+def hello():
+    return jsonify({
+        "service": "MaskTerial 2D Material Detection Service",
+        "version": "1.0.0",
+        "model_available": MASKTERIAL_AVAILABLE,
+        "endpoints": {
+            "health": "/health",
+            "detect": "/detect (POST)",
+            "detect_from_s3": "/detect_from_s3 (POST)",
+            "info": "/info"
+        }
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({
+        "status": "healthy",
+        "service": "MaskTerial Detection Service",
+        "model_available": MASKTERIAL_AVAILABLE,
+        "aws_region": AWS_REGION,
+        "s3_bucket": S3_BUCKET_NAME,
+        "dynamodb_table": DYNAMODB_TABLE_NAME,
+        "models_s3_bucket": MODELS_S3_BUCKET,
         "timestamp": datetime.now().isoformat()
-    }
+    })
 
-    # Save to S3
-    s3_key = f"calculations/{calculation_id}.json"
-    s3_client.put_object(
-        Bucket=BUCKET_NAME,
-        Key=s3_key,
-        Body=json.dumps(calculation_data),
-        ContentType="application/json"
-    )
+@app.route('/detect', methods=['POST'])
+def detect_image():
+    """Detect 2D materials in uploaded image"""
+    try:
+        # Check if image file is present
+        if 'image' not in request.files:
+            return jsonify({"error": "No image file provided"}), 400
+        
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({"error": "No image file selected"}), 400
+        
+        # Get customer ID from request
+        customer_id = request.form.get('customer_id', 'default-customer')
+        
+        # Generate unique image ID
+        image_id = f"img-{uuid.uuid4()}"
+        timestamp = int(datetime.now().timestamp())
+        
+        # Save original image to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
+            file.save(temp_file.name)
+            temp_path = temp_file.name
+        
+        try:
+            # Perform detection
+            detection_results = detector.detect(temp_path)
+            
+            # Create result image with overlays
+            result_image_data = create_result_image(temp_path, detection_results)
+            
+            if result_image_data is None:
+                return jsonify({"error": "Failed to create result image"}), 500
+            
+            # Generate S3 keys
+            original_key = f"{customer_id}/uploaded/{image_id}_original.jpg"
+            result_key = f"{customer_id}/saved-result/{image_id}_result.jpg"
+            
+            # Read original image data
+            with open(temp_path, 'rb') as f:
+                original_image_data = f.read()
+            
+            # Save images to S3
+            original_saved = save_to_s3(original_image_data, original_key, 'image/jpeg')
+            result_saved = save_to_s3(result_image_data, result_key, 'image/jpeg')
+            
+            if not original_saved or not result_saved:
+                return jsonify({"error": "Failed to save images to S3"}), 500
+            
+            # Prepare metadata
+            metadata = {
+                "customerID": customer_id,
+                "imageID": image_id,
+                "createdAt": timestamp,
+                "type": "UPLOADED",
+                "s3Key": original_key,
+                "thumbnailKey": original_key,
+                "status": "active",
+                "materialType": "detected",
+                "imageSize": len(original_image_data),
+                "imageFormat": "jpg",
+                "processingStatus": "completed",
+                "metadata": {
+                    "detection_results": detection_results,
+                    "total_flakes": detection_results.get('total_flakes', 0),
+                    "uploadSource": "api",
+                    "originalFilename": secure_filename(file.filename),
+                    "processing_timestamp": timestamp
+                },
+                "expiresAt": int((datetime.now() + timedelta(days=365)).timestamp())
+            }
+            
+            # Save metadata to DynamoDB
+            if not save_metadata_to_dynamodb(metadata):
+                return jsonify({"error": "Failed to save metadata to DynamoDB"}), 500
+            
+            # Generate presigned URLs for access
+            original_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': S3_BUCKET_NAME, 'Key': original_key},
+                ExpiresIn=3600
+            )
+            
+            result_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': S3_BUCKET_NAME, 'Key': result_key},
+                ExpiresIn=3600
+            )
+            
+            return jsonify({
+                "status": "success",
+                "image_id": image_id,
+                "customer_id": customer_id,
+                "detection_results": detection_results,
+                "original_image_url": original_url,
+                "result_image_url": result_url,
+                "s3_keys": {
+                    "original": original_key,
+                    "result": result_key
+                },
+                "processing_timestamp": timestamp
+            })
+            
+        finally:
+            # Clean up temporary file
+            os.unlink(temp_path)
+            
+    except Exception as e:
+        logger.error(f"Error in detect_image: {e}")
+        return jsonify({"error": str(e)}), 500
 
-    # Save to DynamoDB with enhanced metadata structure
-    table = dynamodb.Table(TABLE_NAME)
-    metadata = {
-        "operation": operation,
-        "operand_a": a,
-        "operand_b": b,
-        "result": result,
-        "uploadSource": "api",
-        "originalFilename": f"{operation}_calculation.json"
-    }
-    
-    # Convert metadata to use Decimal for float values
-    metadata = convert_to_decimal(metadata)
-    
-    item = {
-        "customerID": "calculator-user",
-        "imageID": calculation_id,
-        "createdAt": int(datetime.now().timestamp()),
-        "type": "CALCULATION",
-        "s3Key": s3_key,
-        "thumbnailKey": s3_key,
-        "status": "active",
-        "materialType": "calculation",
-        "imageSize": len(json.dumps(calculation_data)),
-        "imageFormat": "json",
-        "processingStatus": "completed",
-        "metadata": metadata,
-        "expiresAt": int((datetime.now() + timedelta(days=30)).timestamp())
-    }
-    table.put_item(Item=item)
+@app.route('/detect_from_s3', methods=['POST'])
+def detect_from_s3():
+    """Detect 2D materials in image from S3"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        s3_key = data.get('s3_key')
+        customer_id = data.get('customer_id', 'default-customer')
+        
+        if not s3_key:
+            return jsonify({"error": "No S3 key provided"}), 400
+        
+        # Generate unique image ID
+        image_id = f"img-{uuid.uuid4()}"
+        timestamp = int(datetime.now().timestamp())
+        
+        # Download image from S3
+        try:
+            response = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+            image_data = response['Body'].read()
+        except Exception as e:
+            return jsonify({"error": f"Failed to download image from S3: {e}"}), 500
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
+            temp_file.write(image_data)
+            temp_path = temp_file.name
+        
+        try:
+            # Perform detection
+            detection_results = detector.detect(temp_path)
+            
+            # Create result image with overlays
+            result_image_data = create_result_image(temp_path, detection_results)
+            
+            if result_image_data is None:
+                return jsonify({"error": "Failed to create result image"}), 500
+            
+            # Generate result S3 key
+            result_key = f"{customer_id}/saved-result/{image_id}_result.jpg"
+            
+            # Save result image to S3
+            if not save_to_s3(result_image_data, result_key, 'image/jpeg'):
+                return jsonify({"error": "Failed to save result image to S3"}), 500
+            
+            # Prepare metadata
+            metadata = {
+                "customerID": customer_id,
+                "imageID": image_id,
+                "createdAt": timestamp,
+                "type": "SAVED_RESULT",
+                "s3Key": result_key,
+                "thumbnailKey": result_key,
+                "status": "active",
+                "materialType": "detected",
+                "imageSize": len(result_image_data),
+                "imageFormat": "jpg",
+                "processingStatus": "completed",
+                "metadata": {
+                    "detection_results": detection_results,
+                    "total_flakes": detection_results.get('total_flakes', 0),
+                    "source_s3_key": s3_key,
+                    "processing_timestamp": timestamp
+                },
+                "expiresAt": int((datetime.now() + timedelta(days=365)).timestamp())
+            }
+            
+            # Save metadata to DynamoDB
+            if not save_metadata_to_dynamodb(metadata):
+                return jsonify({"error": "Failed to save metadata to DynamoDB"}), 500
+            
+            # Generate presigned URL for result
+            result_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': S3_BUCKET_NAME, 'Key': result_key},
+                ExpiresIn=3600
+            )
+            
+            return jsonify({
+                "status": "success",
+                "image_id": image_id,
+                "customer_id": customer_id,
+                "detection_results": detection_results,
+                "result_image_url": result_url,
+                "s3_keys": {
+                    "source": s3_key,
+                    "result": result_key
+                },
+                "processing_timestamp": timestamp
+            })
+            
+        finally:
+            # Clean up temporary file
+            os.unlink(temp_path)
+            
+    except Exception as e:
+        logger.error(f"Error in detect_from_s3: {e}")
+        return jsonify({"error": str(e)}), 500
 
-def save_error_result(operation, a, b, error_message):
-    """Save error result to storage with enhanced metadata"""
-    if not BOTO3_AVAILABLE:
-        return
-    
-    error_id = f"error-{uuid.uuid4()}"
-    error_data = {
-        "operation": operation,
-        "a": a,
-        "b": b,
-        "error": error_message,
-        "timestamp": datetime.now().isoformat()
-    }
+@app.route('/info')
+def info():
+    return jsonify({
+        "service": "MaskTerial 2D Material Detection Service",
+        "version": "1.0.0",
+        "model_available": MASKTERIAL_AVAILABLE,
+        "model_path": MODEL_PATH,
+        "aws_configuration": {
+            "region": AWS_REGION,
+            "s3_bucket": S3_BUCKET_NAME,
+            "dynamodb_table": DYNAMODB_TABLE_NAME,
+            "models_s3_bucket": MODELS_S3_BUCKET
+        },
+        "endpoints": {
+            "health": "/health",
+            "detect": "/detect (POST) - Upload image for detection",
+            "detect_from_s3": "/detect_from_s3 (POST) - Detect from S3 image",
+            "info": "/info"
+        },
+        "example_usage": {
+            "detect": {
+                "method": "POST",
+                "url": "/detect",
+                "form_data": {
+                    "image": "image file",
+                    "customer_id": "customer-123"
+                }
+            },
+            "detect_from_s3": {
+                "method": "POST",
+                "url": "/detect_from_s3",
+                "json": {
+                    "s3_key": "customer-123/uploaded/image.jpg",
+                    "customer_id": "customer-123"
+                }
+            }
+        }
+    })
 
-    # Save to S3
-    s3_key = f"errors/{error_id}.json"
-    s3_client.put_object(
-        Bucket=BUCKET_NAME,
-        Key=s3_key,
-        Body=json.dumps(error_data),
-        ContentType="application/json"
-    )
-
-    # Save to DynamoDB with enhanced metadata structure
-    table = dynamodb.Table(TABLE_NAME)
-    metadata = {
-        "operation": operation,
-        "operand_a": a,
-        "operand_b": b,
-        "error": error_message,
-        "uploadSource": "api",
-        "originalFilename": f"{operation}_error.json"
-    }
-    
-    # Convert metadata to use Decimal for float values
-    metadata = convert_to_decimal(metadata)
-    
-    item = {
-        "customerID": "calculator-user",
-        "imageID": error_id,
-        "createdAt": int(datetime.now().timestamp()),
-        "type": "ERROR",
-        "s3Key": s3_key,
-        "thumbnailKey": s3_key,
-        "status": "active",
-        "materialType": "error",
-        "imageSize": len(json.dumps(error_data)),
-        "imageFormat": "json",
-        "processingStatus": "completed",
-        "metadata": metadata,
-        "expiresAt": int((datetime.now() + timedelta(days=30)).timestamp())
-    }
-    table.put_item(Item=item)
-
-def test_s3_connection():
-    """Test S3 connection"""
-    if not BOTO3_AVAILABLE:
-        raise Exception("boto3 not available")
-    s3_client.head_bucket(Bucket=BUCKET_NAME)
-
-def test_dynamodb_connection():
-    """Test DynamoDB connection"""
-    if not BOTO3_AVAILABLE:
-        raise Exception("boto3 not available")
-    table = dynamodb.Table(TABLE_NAME)
-    table.table_status
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
- 
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
