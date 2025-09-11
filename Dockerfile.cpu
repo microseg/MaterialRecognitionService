@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM public.ecr.aws/ubuntu/ubuntu:20.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -83,4 +83,4 @@ ENV PYTHONPATH=/opt/maskterial:$PYTHONPATH
 EXPOSE 5000
 
 # Use conda environment for the final command
-CMD ["conda", "run", "-n", "maskterial", "gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "--timeout", "300", "app:app"]
+CMD ["conda", "run", "-n", "maskterial", "gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "--timeout", "300", "maskterial_app:app"]
