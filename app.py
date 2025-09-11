@@ -160,7 +160,98 @@ class MockMaskTerialDetector:
             'image_dimensions': [width, height]
         }
 
-# Initialize detector
+# Helper to standardize detection across real MaskTerial and mock
+def run_detection(image_path):
+    """Run detection and return a normalized dict with flakes + totals.
+
+    If MaskTerial is available, use its predictor.predict(img). Otherwise,
+    use the Mock detector. The returned structure is:
+      {
+        'flakes': [ {'bbox': [x1,y1,x2,y2], 'confidence': float, 'material_type': str}, ...],
+        'total_flakes': int,
+        'image_dimensions': [width, height]
+      }
+    """
+    # Load image
+    image = cv2.imread(image_path)
+    if image is None:
+        raise ValueError("Could not load image for detection")
+
+    height, width = image.shape[:2]
+
+    # Use MaskTerial if available and predictor-like interface exists
+    if MASKTERIAL_AVAILABLE and 'detector' in globals() and hasattr(detector, 'predict'):
+        try:
+            results = detector.predict(image)
+            # Try to convert to dicts using to_dict if available
+            result_dicts = []
+            try:
+                result_dicts = [r.to_dict(return_bbox=True) for r in results]
+            except Exception:
+                # Already dict-like
+                result_dicts = results if isinstance(results, list) else [results]
+
+            flakes = []
+            for r in result_dicts:
+                # Extract bbox in xyxy order
+                bbox = None
+                if isinstance(r, dict):
+                    bbox = r.get('bbox') or r.get('bbox_xyxy') or r.get('box')
+                    # Support xywh style dicts
+                    if bbox is None and all(k in r for k in ('x', 'y', 'w', 'h')):
+                        x, y, w, h = r['x'], r['y'], r['w'], r['h']
+                        bbox = [x, y, x + w, y + h]
+                # Ensure bbox is a list[4]
+                if bbox is None or not hasattr(bbox, '__len__') or len(bbox) != 4:
+                    continue
+
+                # Confidence
+                conf = None
+                for k in ('score', 'confidence', 'prob', 'probability'):
+                    if isinstance(r, dict) and k in r:
+                        conf = r[k]
+                        break
+                if conf is None:
+                    conf = 0.0
+
+                # Material / class label
+                label = None
+                for k in ('class_name', 'label', 'class', 'material', 'material_type'):
+                    if isinstance(r, dict) and k in r:
+                        label = r[k]
+                        break
+                if label is None:
+                    label = 'unknown'
+
+                # Cast + clamp bbox to ints within image bounds
+                x1, y1, x2, y2 = [int(round(float(v))) for v in bbox]
+                x1 = max(0, min(x1, width - 1))
+                y1 = max(0, min(y1, height - 1))
+                x2 = max(0, min(x2, width - 1))
+                y2 = max(0, min(y2, height - 1))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+
+                flakes.append({ 
+                    'bbox': [x1, y1, x2, y2],
+                    'confidence': float(conf),
+                    'material_type': str(label)
+                })
+
+            return {
+                'flakes': flakes,
+                'total_flakes': len(flakes),
+                'image_dimensions': [width, height]
+            }
+        except Exception as e:
+            logger.error(f"MaskTerial predict failed, falling back to mock: {e}")
+            # fall through to mock
+
+    # Fallback to mock
+    mock = MockMaskTerialDetector(MODEL_PATH)
+    return mock.detect(image_path)
+
+# Initialize detector (MaskTerial if available; else mock)
 if MASKTERIAL_AVAILABLE:
     try:
         from maskterial.utils.loader_functions import load_models
@@ -347,7 +438,7 @@ def detect_image():
         
         try:
             # Perform detection
-            detection_results = detector.detect(temp_path)
+            detection_results = run_detection(temp_path)
             
             # Create result image with overlays
             result_image_data = create_result_image(temp_path, detection_results)
@@ -464,7 +555,7 @@ def detect_from_s3():
         
         try:
             # Perform detection
-            detection_results = detector.detect(temp_path)
+            detection_results = run_detection(temp_path)
             
             # Create result image with overlays
             result_image_data = create_result_image(temp_path, detection_results)
