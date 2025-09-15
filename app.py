@@ -5,6 +5,16 @@ A Flask-based API for 2D material flake detection using MaskTerial model
 """
 
 import os
+from pathlib import Path
+try:
+    from dotenv import load_dotenv  # python-dotenv
+    env_name = os.environ.get('APP_ENV', os.environ.get('ENV', 'production')).lower()
+    env_file = Path(__file__).parent / 'config' / f'.env.{env_name}'
+    if env_file.exists():
+        load_dotenv(env_file, override=False)
+except Exception:
+    # If dotenv isn't available or any issue occurs, proceed with existing env
+    pass
 import json
 import uuid
 import boto3
